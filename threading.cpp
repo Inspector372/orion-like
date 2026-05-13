@@ -18,6 +18,18 @@ g++ main.o cuda_functions.o -L/usr/local/cuda/lib64 -lcudart -o my_program
 # (Adjust the -L path based on your CUDA Toolkit installation location)
 */
 
+/*
+문제:
+1. hooking.cpp는 따로 컴파일되고, 이를 LD_PRELOAD로 불러와서 threading이 cudalib을 'link하기 전' 미리 linking하는 것
+그러면, hooking.cpp가 원하는 것은 cudalib이 어디에 있던 간에, link되기 전에 해당 함수들을 미리 hook해두는 것
+	-> cudaFuncGetName같은 함수는 hooking.cpp에서 사용 불가능???
+threading에서는 접근 가능, 여기에서 손을 봐야하나?
+
+2. threading이 정확히 뭘 하는 program?
+프로그램들 [job1, job2, ..., jobN]을 불러와서 '실행' 하는 것으로 봐도 되나?
+
+*/
+
 #include <stdio.h>
 #include <dlfcn.h>
 #include <pthread.h>
@@ -44,6 +56,10 @@ cudaError_t (*malloc_function)(void** devPtr, size_t size);
 cudaError_t (*free_function)(void* devPtr);
 cudaError_t (*memset_function)(void* devPtr, int  value, size_t count);
 cudaError_t (*memset_async_function)(void* devPtr, int  value, size_t count, cudaStream_t stream);
+
+cudaError_t (*getname_function)(const char** name, CUfunction func);
+cudaError_t (*paraminfo_function)(CUfunction func, size_t paramIndex, size_t* paramOffset, size_t* paramSize);
+
 
 void* klib;
 
@@ -98,6 +114,13 @@ void register_functions() {
 	// for memset_async
 	*(void **)(&memset_async_function) = dlsym (handle, "cudaMemsetAsync");
 	assert (memset_async_function != NULL);
+
+
+	// for inspections, we need to load those functions too.
+	*(void **)(&getname_function) = dlsym (handle, "cudaFuncGetName");
+	assert (getname_function != NULL);
+	*(void **)(&paraminfo_function) = dlsym (handle, "cudaFuncGetParamInfo");
+	assert (paraminfo_function != NULL);
 
 }
 
@@ -172,6 +195,25 @@ void* scheduler(void* scarg) {
 			// and changed when we intercept other cuda calls.
 			func_record frecord = (*work_queue[turn]).front();
 			kernel_record record = frecord.data.krecord;
+
+			const char* func_name_ptr;
+    		size_t func_param_count = 0;
+    		size_t func_param_offset;
+			size_t func_param_size;
+			cudaError_t param_err;	
+			printf("test starts, %p\n", getname_function);
+			param_err = (*getname_function)(&func_name_ptr, (CUfunction)record.func);
+    		printf("cudaFuncGetName test : %s\n", func_name_ptr);
+			printf("cudaFuncGetName sanity test: %s (%d)\n", cudaGetErrorString(param_err), param_err);
+			while ((param_err = (*paraminfo_function)((CUfunction)record.func, func_param_count, &func_param_offset, &func_param_size)) == cudaSuccess) {
+        		printf("cudaFuncGetParamInfo test on param[%ld] : offset %ld, size %ld\n", func_param_count, func_param_offset, func_param_size);
+        		func_param_count++;
+    		}
+
+			if (func_param_count == 0) {
+    			printf("cudaFuncGetParamInfo failed immediately: %s (%d)\n",
+           		cudaGetErrorString(param_err), param_err);
+			}
 
 			// kernel wrapper needed.
 			// TODO: how to pass status?

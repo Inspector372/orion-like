@@ -12,7 +12,7 @@ kernel_example.o:
 	nvcc -cudart=shared -std=c++11 -c -o kernel_example.o kernel_example.cu
 
 threading: 
-	g++ threading.cpp kernel_example.o -o threading -lcudart
+	g++ threading.cpp kernel_example.o -o threading -ldl -pthread -lcudart -L/usr/local/cuda-12.8/lib64
 
 all:
 	make hooking.so

@@ -28,6 +28,10 @@ queue<func_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 
 extern cudaError_t (*kernel_function)(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream);
+extern cudaError_t (*getname_function)(const char** name, const void* func);
+extern cudaError_t (*paraminfo_function)(const void* func, size_t paramIndex, size_t* paramOffset, size_t* paramSize);
+
+
 
 // orion uses thread ids to inspect 'what is this thread's thread number'.
 // this is a trick, but let's use it.
