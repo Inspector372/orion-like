@@ -1,34 +1,9 @@
-/*
-  Test for kernel-inside-kernel launch.
-  fun2() is __global__ kernel, but it's device entrypoint is extracted by libsmctrl_test().
-  it's stored in kernel_ptrs[0], and stored in device-side global variable fun2_ptr.
-  wrapper() calls fun2_ptr like __device__ kernel, and try to filter index < 100 or index > 800.
-  not filtered A[index] will have value of 250,
-  while filtered A[index] will have value of 100.
-  working in google colab enviroment, but need to test it further.
-
-  TODO: infer function structure from **any** function call.
-
-  How to test:
-  gcc libsmctrl.c -c -o libsmctrl.o -fPIC
-  ar rcs libsmctrl.a libsmctrl.o
-  nvcc -g -G -arch=sm_75 test_simple.cu -o test_simple libsmctrl.a -lcuda
-*/
 
 /*
-    TODO
-        given: kernel_address, arg**
-        want: kernel_address(arg1, arg2, arg3, ... argN)
-
-    문제를 쪼개보자.
-    문제 1: argk의 type은 무엇?
-        -> cuda runtime api가 '작동한다면', type의 크기와 offset은 알 수 있음
-        그러면 uint_32t, uint_64t와 같은 '똑같은 크기의 type'으로 바꿀 수 있나?
-        -> 예제 상에서는 가능했음, 실제 orion-like 구현체 내에서는?
-    문제 2: kernel_address의 type은 무엇?
-        void (*func)(type1, type2, .. typeN)을 dynamic하게 구현할 수 있을까?
-
-
+    test_simple_3.cu:
+        wrapper에 전달되는 인자들이 실제 type이 아니어도 문제가 없다면,
+        아마도 실제 함수 내에 정의되어 있는 "이만큼만 가져가라"를 읽고 전달하는 것?
+        그러면 그냥 union 구조체 하나에 다 때려박고 보내도 문제가 없는 게 아닐까?
 */
 
 #include <iostream>
