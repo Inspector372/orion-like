@@ -1,34 +1,6 @@
 /*
-  Test for kernel-inside-kernel launch.
-  fun2() is __global__ kernel, but it's device entrypoint is extracted by libsmctrl_test().
-  it's stored in kernel_ptrs[0], and stored in device-side global variable fun2_ptr.
-  wrapper() calls fun2_ptr like __device__ kernel, and try to filter index < 100 or index > 800.
-  not filtered A[index] will have value of 250,
-  while filtered A[index] will have value of 100.
-  working in google colab enviroment, but need to test it further.
-
-  TODO: infer function structure from **any** function call.
-
-  How to test:
-  gcc libsmctrl.c -c -o libsmctrl.o -fPIC
-  ar rcs libsmctrl.a libsmctrl.o
-  nvcc -g -G -arch=sm_75 test_simple.cu -o test_simple libsmctrl.a -lcuda
-*/
-
-/*
-    TODO
-        given: kernel_address, arg**
-        want: kernel_address(arg1, arg2, arg3, ... argN)
-
-    문제를 쪼개보자.
-    문제 1: argk의 type은 무엇?
-        -> cuda runtime api가 '작동한다면', type의 크기와 offset은 알 수 있음
-        그러면 uint_32t, uint_64t와 같은 '똑같은 크기의 type'으로 바꿀 수 있나?
-        -> 예제 상에서는 가능했음, 실제 orion-like 구현체 내에서는?
-    문제 2: kernel_address의 type은 무엇?
-        void (*func)(type1, type2, .. typeN)을 dynamic하게 구현할 수 있을까?
-
-
+    test_simple_4.cu:
+        test_simple_2와 비슷한 방식으로 test_simple_3의 box 선언을 wrapper 밖으로 옮김.
 */
 
 #include <iostream>
@@ -52,7 +24,10 @@ __global__ void fun2(float Z, double* A, float B) {
 typedef union{
     uint32_t data32;
     uint64_t data64;
-    float4 data128;  
+    // ubox의 크기가 16 byte면 정상적으로 작동하지 않고,
+    // 8 byte면 정상적으로 작동한다???
+    // alignment issue?
+    // float4 data128;  
 } ubox;
 
 typedef void (*func_ptr_t)(ubox, ubox, ubox);
