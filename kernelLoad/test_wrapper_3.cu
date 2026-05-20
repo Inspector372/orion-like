@@ -1,15 +1,8 @@
-/*
-  How to test:
-  gcc libsmctrl.c -c -o libsmctrl.o -fPIC
-  ar rcs libsmctrl.a libsmctrl.o
-  nvcc -g -G test_simple.cu -o test_simple libsmctrl.a -lcuda
-*/
 
 /*
-    pass-by-struct
-    1. make biggggg struct
-    2. pass the struct by value.
-    3. the target kernel will see this struct as separate variable.
+    test_wrapper_3.cu:
+        인자 type 전달에 대한 궁극적인 해결법: struct를 만들어서, 그 안에 다 끼워넣는다.
+        
 
 */
 
