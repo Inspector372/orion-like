@@ -1,16 +1,12 @@
-/*
-  How to test:
-  gcc libsmctrl.c -c -o libsmctrl.o -fPIC
-  ar rcs libsmctrl.a libsmctrl.o
-  nvcc -g -G test_simple.cu -o test_simple libsmctrl.a -lcuda
-*/
 
 /*
-    pass-by-struct
-    1. make biggggg struct
-    2. pass the struct by value.
-    3. the target kernel will see this struct as separate variable.
-
+    test_wrapper_2.cu:
+        wrapper->kernel으로 가는 과정에서,
+            1. kernel의 인자 뒤에 '뭔가 더 붙어 있어도' 상관은 없음.
+            2. kernel의 인자의 type은 중요하지 않음(test_simple_1.cu).
+            3. kernel의 인자를 ubox로 설정하는 것은 불가능함(test_simple_4.cu).
+            4. kernel 내에 다른 __device__ function call이 있어도 문제는 없음.
+            5. kernel 내에 printf()가 있으면 printf() call 중 invalid instruction error 발생.
 */
 
 #include <iostream>
@@ -32,44 +28,9 @@ __global__ void add100(double* A, size_t length) {
     if(workIndex < length) {
         A[workIndex] += 100.0;
     }
-    return;
-}
-
-/*
-    Tests 
-*/
-__global__ void add100_and_addmore(double* A, size_t length) {
-    int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    if(workIndex < length) {
-        A[workIndex] += 100.0;
-    }
     if(workIndex == 300) addmore(A);
     return;
 }
-
-__global__ void mul(double* res, double* op1, double* op2, size_t length) {
-    int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    if(workIndex < length) {
-        res[workIndex] = op1[workIndex] * op2[workIndex];
-    }
-    return;
-}
-
-__global__ void complicated(float A, double* B, double* C, float D, double E, size_t length) {
-    int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    if(workIndex < length) {
-        B[workIndex] = C[workIndex];
-        C[workIndex] = 2 * B[workIndex];
-        B[workIndex] += A;
-        C[workIndex] *= D;
-        C[workIndex] -= E;
-    }
-    return;
-}
-
-typedef struct{
-    unsigned char data[512];  
-} box512;
 
 typedef void (*func_ptr_t)();
 
