@@ -2,7 +2,9 @@
 /*
     test_wrapper_3.cu:
         인자 type 전달에 대한 궁극적인 해결법: struct를 만들어서, 그 안에 다 끼워넣는다.
-        
+        wrapper128()은 첫 인자로 실제 kernel의 argument 구조를 모방한 구조체, func, low_idx, high_idx를 받음,
+        low_idx, high_idx로 filtering 이후, func를 '그대로' call(no arguments)
+        그러면 func로 'control flow'만 옮겨진 것처럼 작동함.
 
 */
 
