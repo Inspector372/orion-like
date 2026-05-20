@@ -1,18 +1,13 @@
 /*
-  Test for kernel-inside-kernel launch.
-  fun2() is __global__ kernel, but it's device entrypoint is extracted by libsmctrl_test().
-  it's stored in kernel_ptrs[0], and stored in device-side global variable fun2_ptr.
-  wrapper() calls fun2_ptr like __device__ kernel, and try to filter index < 100 or index > 800.
-  not filtered A[index] will have value of 250,
-  while filtered A[index] will have value of 100.
-  working in google colab enviroment, but need to test it further.
+    test_wrapper_1.cu:
+        orion에 포팅하기 전에, 실제로 kernel hooking에서 얻을 수 있는 정보(**args, cudaGetParamInfo()) 형태로 wrapper에 인자를 전달하고,
+        실제 wrapper를 여러 kernel에 대해 테스트.
+        만약에 test_simple_1~test_simple_3에서 추론한 내용이 맞다면,
+        정상적으로 작동해야 할 코드.
 
-  TODO: infer function structure from **any** function call.
+        -> Wrapper 내에서 device call처럼 부르는 global kernel은,
+        해당 wrapper의 인자를 **그대로** 물려받음.
 
-  How to test:
-  gcc libsmctrl.c -c -o libsmctrl.o -fPIC
-  ar rcs libsmctrl.a libsmctrl.o
-  nvcc -g -G test_simple.cu -o test_simple libsmctrl.a -lcuda
 */
 
 #include <iostream>
