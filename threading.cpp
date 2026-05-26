@@ -43,6 +43,7 @@ threading에서는 접근 가능, 여기에서 손을 봐야하나?
 
 #include "kernel_example.h"
 #include "hooking.h"
+#include "wrapper.h"
 
 #define THREAD_NUM 4
 #define LEN 1024

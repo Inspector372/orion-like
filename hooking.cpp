@@ -27,8 +27,8 @@ pthread_t* thread_ids;
 queue<func_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 
-extern cudaError_t (*kernel_function)(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream);
-extern cudaError_t (*paraminfo_function)(const void* func, size_t paramIndex, size_t* paramOffset, size_t* paramSize);
+cudaError_t (*kernel_func)(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream);
+cudaError_t (*paraminfo_func)(const void* func, size_t paramIndex, size_t* paramOffset, size_t* paramSize);
 
 
 
@@ -77,6 +77,20 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	int idx = get_idx();
 	fprintf(stderr, "caught call from %d!\n", idx);
 
+	if (kernel_func == NULL) {
+		*(void **)(&kernel_func) = dlsym (RTLD_NEXT, "cudaLaunchKernel");
+		assert (kernel_func != NULL);
+	}
+
+	if (paraminfo_func == NULL) {
+		*(void **)(&paraminfo_func) = dlsym (RTLD_NEXT, "cudaFuncGetParamInfo");
+		assert (paraminfo_func != NULL);
+	}
+
+	// TODO: inspect kernel size and setup atomization info
+	// False Launch.
+
+
 	cudaError_t err = cudaSuccess;
 	kernel_record new_kernel_record;
 	
@@ -84,8 +98,7 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	assert(work_queue != NULL);
 
 	pthread_mutex_lock(work_queue_mutex[idx]);
-
-	// TODO: inspect kernel size and setup atomization info
+	
 	// queue multiple kernels of same instance
 	new_kernel_record = {func, gridDim, blockDim, args, sharedMem, stream, false, 0};
 	union func_data new_func_data;
