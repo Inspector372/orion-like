@@ -24,10 +24,17 @@ struct global_sm_control {
 	uint64_t mask;
 } __attribute__((packed));
 
+uint64_t wrapper_ptr;
+uint32_t nothing_ptr_upper;
+uint32_t nothing_ptr_lower;
 uint64_t kernel_ptrs[64];
 uint32_t offset_ptrs[64];
 uint32_t test_run = 1;
+uint32_t callback_mode = 0;
 static uint32_t counter = 0;
+const uint32_t MAGIC = 16392;
+const uint32_t SHARED_MEMORY_SIZE_MASK = 524287;
+const uint32_t THREAD_DIM_MASK = 65535;
 // /*** CUDA Globals Manipulation. CUDA 10.2 only ***/
 
 // // Ends up being 0x7fb7fa3408 in some binaries (CUDA 10.2, Jetson)
@@ -475,13 +482,48 @@ abort_cuda:
 
 /* ** Original libsmctrl code until here ** */
 
-/*
-	What we need to do:
-	1. locate the field of kernel value in QMD structure.
-	2. learn 'how' we should modify it (like, what kernel address are we using, and where it comes from)
-	3. how to pass arguments and original kernel address?
+/* 
+	if callback_mode == 0, it's wrapper assign mode.
+	consider any kernel call as wrapper call, then store PROGRAM_ADDRESS at wrapper_ptr.
 
+	if callback_mode == 1, it's kernel mode.
 */
+static void false_launch_callback(void *ukwn, int domain, int cbid, const void *in_params) {
+	if (*(uint32_t*)in_params < 0x50) {
+		fprintf(stderr, "Unsupported CUDA version for callback-based SM masking. Aborting...\n");
+		return;
+	}
+	if (!**((uintptr_t***)in_params+8)) {
+		fprintf(stderr, "Called with NULL halLaunchDataAllocation\n");
+		return;
+	}
+
+	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
+	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
+	uint32_t *offset_ptr = (uint32_t*)(**((char***)in_params + 8) + 32);
+	uint32_t *ptr_ptr = (uint32_t*)(**((char***)in_params + 8) + 72);
+	if (callback_mode == 0) {
+		// fetch this to wrapper ptr.
+		wrapper_ptr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
+		printf("set wrapper_ptr: %lx\n", wrapper_ptr);
+	}
+	else if(callback_mode == 1) {
+		nothing_ptr_upper = *upper_ptr;
+		nothing_ptr_lower = *lower_ptr;
+		printf("set nothing_ptr: %lx\n", ((uint64_t)(nothing_ptr_upper) << 32) + (uint64_t)(nothing_ptr_lower));
+	}
+	else if(callback_mode == 2) {
+		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
+		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx\n", program_addr, wrapper_ptr);
+		if(program_addr == wrapper_ptr) return;
+		fprintf(stderr, "call nothing\n");
+		// store PROGRAM_ADDRESS... todo later.
+
+		// modify something so that we hit error...?
+		*upper_ptr = nothing_ptr_upper;
+		*lower_ptr = nothing_ptr_lower;
+	}
+}
 
 static void test_callback(void *ukwn, int domain, int cbid, const void *in_params) {
 	if (*(uint32_t*)in_params < 0x50) {
@@ -501,6 +543,8 @@ static void test_callback(void *ukwn, int domain, int cbid, const void *in_param
 
 	// print everything in QMD.
 	// fprintf(stderr, "printing everything from QMD\n");
+
+	// 544 - 561 is 18-bit SHARED_MEMORY_SIZE.
 	int i;
 	for(i = 0; i < 64; i++) {
 		uint32_t *ptr = (uint32_t*)(**((char***)in_params + 8) + 4 * i);
@@ -509,6 +553,13 @@ static void test_callback(void *ukwn, int domain, int cbid, const void *in_param
 	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
 	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
 	uint32_t *offset_ptr = (uint32_t*)(**((char***)in_params + 8) + 32);
+	uint32_t *shared_mem_ptr = (uint32_t*)(**((char***)in_params + 8) + 68);
+	uint32_t *dim0_ptr = (uint32_t*)(**((char***)in_params + 8) + 74);
+	uint32_t *dim1_ptr = (uint32_t*)(**((char***)in_params + 8) + 76);
+	uint32_t *dim2_ptr = (uint32_t*)(**((char***)in_params + 8) + 78);
+
+	fprintf(stderr, "CTA_THREAD_DIMENSION, 0: %d, 1: %d, 2: %d\n", *dim0_ptr & THREAD_DIM_MASK, *dim1_ptr & THREAD_DIM_MASK, *dim2_ptr & THREAD_DIM_MASK);
+
 	if (test_run) {
 		offset_ptrs[counter] = *offset_ptr;
 		kernel_ptrs[counter++] = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
@@ -516,7 +567,7 @@ static void test_callback(void *ukwn, int domain, int cbid, const void *in_param
 	}
 }
 
-static void test_func() {
+static void test_func(uint32_t mode) {
 	int (*subscribe)(uint32_t* hndl, void(*callback)(void*, int, int, const void*), void* ukwn);
 	int (*enable)(uint32_t enable, uint32_t hndl, int domain, int cbid);
 	uintptr_t* tbl_base;
@@ -531,7 +582,15 @@ static void test_func() {
 	subscribe = (typeof(subscribe))subscribe_func_addr;
 	enable = (typeof(enable))enable_func_addr;
 	int res = 0;
-	res = subscribe(&my_hndl, test_callback, NULL);
+	switch(mode) {
+		case 0:
+			res = subscribe(&my_hndl, test_callback, NULL);
+			break;
+
+		case 1:
+			res = subscribe(&my_hndl, false_launch_callback, NULL);
+			break;
+	}
 	if (res) {
 		fprintf(stderr, "libsmctrl: Error subscribing to launch callback. Error %d\n", res);
 		return;
@@ -541,7 +600,7 @@ static void test_func() {
 		fprintf(stderr, "libsmctrl: Error enabling launch callback. Error %d\n", res);
 }
 
-void libsmctrl_test() {
+void libsmctrl_test(uint32_t mode) {
 	int ver;
 	cuDriverGetVersion(&ver);
 	if (ver == 10020) {
@@ -551,7 +610,7 @@ void libsmctrl_test() {
 		// g_sm_control->enabled = 1;
 	} else if (ver > 10020) {
 		if (!sm_control_setup_called)
-			test_func();
+			test_func(mode);
 	} else { // < CUDA 10.2
 		abort(1, ENOSYS, "Global masking requires at least CUDA 10.2; "
 		                 "this application is using CUDA %d.%d",
