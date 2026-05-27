@@ -514,11 +514,6 @@ static void test_callback(void *ukwn, int domain, int cbid, const void *in_param
 		kernel_ptrs[counter++] = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
 		return;
 	}
-	// printf("prev upper : %p, lower : %p\n",*upper_ptr,*lower_ptr);
-	*upper_ptr = (uint32_t)(kernel_ptrs[0] >> 32);
-	*lower_ptr = (uint32_t)kernel_ptrs[0];
-	*offset_ptr = offset_ptrs[0];
-	// printf("next upper : %p, lower : %p\n",*upper_ptr,*lower_ptr);
 }
 
 static void test_func() {

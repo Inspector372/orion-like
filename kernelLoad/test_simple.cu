@@ -6,10 +6,23 @@
 */
 
 /*
-    pass-by-struct
-    1. make biggggg struct
-    2. pass the struct by value.
-    3. the target kernel will see this struct as separate variable.
+    False Launch Solution.
+    (a. QMD global callback를 적용해 첫 번째 launch(wrapper) 제외 모든 launch를 faulty launch로 만들어버림)
+    (b. launch of wrapper() -> PROGRAM_ADDRESS 저장)
+    1. cudaLaunchKernel()를 capture
+    2. False Launch: real_cudaLaunchKernel()에 func를 넣고 sharedMem=t로 바꾸고 실행
+    (c. callback이 QMD를 건드려 faulty launch로 바꿈 )
+    3. QMD callback에서 PROGRAM_ADDRESS를 F[SHARED_MEMORY_SIZE]에 fetch
+    4. Return된 Error는 무시, user-level로 돌아가지 않도록 함 
+    5. fetch된 PROGRAM_ADDRESS와 kernel address를 이용해 real_cudaLaunchKernel()에 wrapper address와 적당한 argument를 넣고 실행
+
+    문제 1: global callback에서, false launch를 어떻게 구분...?
+     -> wrapper()를 제외한 모든 launch를 false launch로 간주?
+     -> 이러면 모든 call을 wrapper()를 거쳐서 실행해야 함.
+    문제 2: 이걸 어디로 fetch?
+     -> sharedMem을 key로 사용, F[t] = PROGRAM_ADDRESS
+    문제 3: error를 어떤 type으로 return하는가?
+     -> 
 
 */
 

@@ -87,6 +87,9 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 		assert (paraminfo_func != NULL);
 	}
 
+	// False Launch to get function address.
+	
+
 	// TODO: inspect kernel size and setup atomization info
 	// False Launch.
 
