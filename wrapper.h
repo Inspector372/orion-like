@@ -1,6 +1,6 @@
 typedef struct{
-    unsigned char data[128];  
-} box128;
+    unsigned char data[256];  
+} box256;
 
 typedef void (*func_ptr_t)();
 

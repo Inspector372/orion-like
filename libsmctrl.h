@@ -5,11 +5,9 @@
  * logic in the CUDA driver library, and thus requires a build with -lcuda.
  */
 
-// Modified, for kernel-inside-kernel launch.
-
-// once libsmctrl_test() is called, modified version of libsmctrl start storing every new __global__ kernel's PROGRAM_ADDRESS QMD portion.
-// kernel_ptrs[] store device addresses of every global kernel launched.
-// test_run need to be set to 1 for now.
+/*
+  !!!! THIS IS MODIFIED VERSION !!!!
+*/
 
 #ifdef __cplusplus
 extern "C" {
@@ -75,7 +73,6 @@ extern int libsmctrl_get_tpc_info_cuda(uint32_t* num_tpcs, int cuda_dev);
 extern void libsmctrl_test(uint32_t mode);
 
 extern uint64_t kernel_ptrs[1000];
-extern uint32_t test_run;
 extern uint64_t wrapper_ptr;
 extern uint32_t callback_mode;
 

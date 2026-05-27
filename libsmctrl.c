@@ -4,6 +4,12 @@
  * Library to control SM masks on CUDA launches. Co-opts preexisting debug
  * logic in the CUDA driver library, and thus requires a build with -lcuda.
  */
+
+/*
+  !!!! THIS IS MODIFIED VERSION !!!!
+  Need to erase some non-used original code, but let's do that later.
+*/
+
 #include <cuda.h>
 
 #include <errno.h>
@@ -28,13 +34,7 @@ uint64_t wrapper_ptr;
 uint32_t nothing_ptr_upper;
 uint32_t nothing_ptr_lower;
 uint64_t kernel_ptrs[1000];
-uint32_t offset_ptrs[64];
-uint32_t test_run = 1;
 uint32_t callback_mode = 0;
-static uint32_t counter = 0;
-const uint32_t MAGIC = 16392;
-const uint32_t SHARED_MEMORY_SIZE_MASK = 524287;
-const uint32_t THREAD_DIM_MASK = 65535;
 // /*** CUDA Globals Manipulation. CUDA 10.2 only ***/
 
 // // Ends up being 0x7fb7fa3408 in some binaries (CUDA 10.2, Jetson)
@@ -486,7 +486,13 @@ abort_cuda:
 	if callback_mode == 0, it's wrapper assign mode.
 	consider any kernel call as wrapper call, then store PROGRAM_ADDRESS at wrapper_ptr.
 
-	if callback_mode == 1, it's kernel mode.
+	if callback_mode == 1, it's idle kernel assign mode.
+    consider any kernel call as idle kernel call, then store PROGRAM_ADDRESS at nothing_ptr_upper and lower.
+
+    if callback_mode == 2, it's normal kernel launch mode.
+    every non-wrapper call is snapped and PROGRAM_ADDRESS is replaced with idle kernel which does nothing.
+    and its own PROGRAM_ADDRESS is stored at kernel_ptrs[t] where t is blockDim.x,
+    which is extracted from CTA_THREAD_DIMENSION_0 field.
 */
 static void false_launch_callback(void *ukwn, int domain, int cbid, const void *in_params) {
 	if (*(uint32_t*)in_params < 0x50) {
@@ -500,8 +506,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 
 	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
 	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
-	uint32_t *offset_ptr = (uint32_t*)(**((char***)in_params + 8) + 32);
-	uint32_t *ptr_ptr = (uint32_t*)(**((char***)in_params + 8) + 72);
+	uint16_t *dim0_ptr = (uint16_t*)(**((char***)in_params + 8) + 74);
 	if (callback_mode == 0) {
 		// fetch this to wrapper ptr.
 		wrapper_ptr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
@@ -517,53 +522,12 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx\n", program_addr, wrapper_ptr);
 		if(program_addr == wrapper_ptr) return;
 		fprintf(stderr, "call nothing\n");
-		// store PROGRAM_ADDRESS... todo later.
+		// store PROGRAM_ADDRESS.
+        kernel_ptrs[*dim0_ptr] = program_addr;
 
 		// modify something so that we hit error...?
 		*upper_ptr = nothing_ptr_upper;
 		*lower_ptr = nothing_ptr_lower;
-	}
-}
-
-static void test_callback(void *ukwn, int domain, int cbid, const void *in_params) {
-	if (*(uint32_t*)in_params < 0x50) {
-		fprintf(stderr, "Unsupported CUDA version for callback-based SM masking. Aborting...\n");
-		return;
-	}
-	if (!**((uintptr_t***)in_params+8)) {
-		fprintf(stderr, "Called with NULL halLaunchDataAllocation\n");
-		return;
-	}
-	// fprintf(stderr, "cta: %lx\n", *(uint64_t*)(**((char***)in_params + 8) + 74));
-	// TODO: Check for supported QMD version (>XXX, <4.00)
-	// TODO: Support QMD version 4 (Hopper), where offset starts at +304 (rather than +84) and is 72 bytes (rather than 8 bytes) wide
-	// uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 84);
-	// uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 88);
-	// *lower_ptr = (uint32_t)g_sm_mask;
-
-	// print everything in QMD.
-	// fprintf(stderr, "printing everything from QMD\n");
-
-	// 544 - 561 is 18-bit SHARED_MEMORY_SIZE.
-	int i;
-	for(i = 0; i < 64; i++) {
-		uint32_t *ptr = (uint32_t*)(**((char***)in_params + 8) + 4 * i);
-		// fprintf(stderr, "at offset %d: %x\n", i * 32, *ptr);
-	}
-	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
-	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
-	uint32_t *offset_ptr = (uint32_t*)(**((char***)in_params + 8) + 32);
-	uint32_t *shared_mem_ptr = (uint32_t*)(**((char***)in_params + 8) + 68);
-	uint32_t *dim0_ptr = (uint32_t*)(**((char***)in_params + 8) + 74);
-	uint32_t *dim1_ptr = (uint32_t*)(**((char***)in_params + 8) + 76);
-	uint32_t *dim2_ptr = (uint32_t*)(**((char***)in_params + 8) + 78);
-
-	fprintf(stderr, "CTA_THREAD_DIMENSION, 0: %d, 1: %d, 2: %d\n", *dim0_ptr & THREAD_DIM_MASK, *dim1_ptr & THREAD_DIM_MASK, *dim2_ptr & THREAD_DIM_MASK);
-
-	if (test_run) {
-		offset_ptrs[counter] = *offset_ptr;
-		kernel_ptrs[counter++] = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
-		return;
 	}
 }
 
@@ -582,15 +546,7 @@ static void test_func(uint32_t mode) {
 	subscribe = (typeof(subscribe))subscribe_func_addr;
 	enable = (typeof(enable))enable_func_addr;
 	int res = 0;
-	switch(mode) {
-		case 0:
-			res = subscribe(&my_hndl, test_callback, NULL);
-			break;
-
-		case 1:
-			res = subscribe(&my_hndl, false_launch_callback, NULL);
-			break;
-	}
+    res = subscribe(&my_hndl, false_launch_callback, NULL);
 	if (res) {
 		fprintf(stderr, "libsmctrl: Error subscribing to launch callback. Error %d\n", res);
 		return;
@@ -600,7 +556,7 @@ static void test_func(uint32_t mode) {
 		fprintf(stderr, "libsmctrl: Error enabling launch callback. Error %d\n", res);
 }
 
-void libsmctrl_test(uint32_t mode) {
+void libsmctrl_false_launch_callback() {
 	int ver;
 	cuDriverGetVersion(&ver);
 	if (ver == 10020) {
@@ -610,7 +566,7 @@ void libsmctrl_test(uint32_t mode) {
 		// g_sm_control->enabled = 1;
 	} else if (ver > 10020) {
 		if (!sm_control_setup_called)
-			test_func(mode);
+			test_func();
 	} else { // < CUDA 10.2
 		abort(1, ENOSYS, "Global masking requires at least CUDA 10.2; "
 		                 "this application is using CUDA %d.%d",

@@ -7,11 +7,12 @@
 
 /*
     False Launch Solution.
-    (a. QMD global callback를 적용해 첫 번째 launch(wrapper) 제외 모든 launch를 faulty launch로 만들어버림)
+    (a. QMD global callback를 적용해 첫 번째 launch(wrapper) 제외 모든 launch의 PROGRAM_ADDRESS를 do_nothing으로 변경)
     (b. launch of wrapper() -> PROGRAM_ADDRESS 저장)
+    (c. launch of do_nothing() -> PROGRAM_ADDRESS 저장)
     1. cudaLaunchKernel()를 capture
     2. False Launch: real_cudaLaunchKernel()에 func를 넣고 ThreadDim=t로 바꾸고 실행
-    (c. callback이 QMD를 건드려 do_nothing kernel로 silent exit )
+    (d. callback이 QMD를 건드려 do_nothing kernel로 silent exit )
     3. QMD callback에서 PROGRAM_ADDRESS를 F[THREAD_DIMENSION0]에 fetch
     4. Silent exit에서는 return된 에러가 없음
     5. fetch된 PROGRAM_ADDRESS와 kernel address를 이용해 real_cudaLaunchKernel()에 wrapper address와 적당한 argument를 넣고 실행
@@ -21,6 +22,10 @@
      -> 이러면 모든 call을 wrapper()를 거쳐서 실행해야 함.
     문제 2: 이걸 어디로 fetch?
      -> ThreadDim을 key로 사용, F[ThreadDim] = PROGRAM_ADDRESS
+
+    의문점 1. wrapper()의 PROGRAM_ADDRESS는 바뀌지 않는가?
+      -> test에서는 바뀌지 않음, 다만 실제 launch에서는 configuration과 context에 따라 바뀔지도...?
+      -> 그러면 wrapper()를 따로 구분할 방법이 있을까?
 
 */
 
