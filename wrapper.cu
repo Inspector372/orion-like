@@ -4,7 +4,8 @@
     so multiple box size need to be supported later.
     current kernel will raise error if total size of parameter is bigger than 256 bytes.
 */ 
-
+#include <cuda.h>
+#include <cuda_runtime.h>
 #include "wrapper.h"
 
 __global__ void wrapper256(box256 arg, void* func, size_t lidx, size_t hidx) {
@@ -42,7 +43,7 @@ void initial_nothing_run() {
 
     TODO: support multiple box size.
 */
-void run_wrapper(void* kernel_func, void* paraminfo_func, void* target_kernel, void* target_kernel_program_addr, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream, size_t lidx, size_t hidx) {
+void run_wrapper(void* kernel_func, void* paraminfo_func, const void* target_kernel, void* target_kernel_program_addr, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream, size_t lidx, size_t hidx) {
     box256 argbox;
     size_t func_param_count = 0;
     size_t func_param_offset;
@@ -50,7 +51,7 @@ void run_wrapper(void* kernel_func, void* paraminfo_func, void* target_kernel, v
 	cudaError_t param_err;
     
     while ((param_err = (*((paraminfo_func_t*)paraminfo_func))((CUfunction)target_kernel, func_param_count, &func_param_offset, &func_param_size)) == cudaSuccess) {
-        memcpy(&(argbox[func_param_offset]), args[func_param_count], func_param_size);
+        memcpy(&(argbox.data[func_param_offset]), args[func_param_count], func_param_size);
         func_param_count++;
     }
 
@@ -63,7 +64,7 @@ void run_wrapper(void* kernel_func, void* paraminfo_func, void* target_kernel, v
         &func,
         &lidx_arg,
         &hidx_arg
-    }
+    };
 
     (*((kernel_func_t*)kernel_func))((const void*)wrapper256, gridDim, blockDim, kernel_args, sharedMem, stream);
 }

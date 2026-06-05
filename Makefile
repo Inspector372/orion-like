@@ -21,7 +21,7 @@ wrapper.o:
 	nvcc -cudart=shared -std=c++11 -c -o wrapper.o wrapper.cu
 
 threading: 
-	g++ threading.cpp kernel_example.o -o threading libsmctrl.a -ldl -pthread -lcudart -L/usr/local/cuda-12.8/lib64
+	g++ threading.cpp kernel_example.o wrapper.o -o threading libsmctrl.a -ldl -pthread -lcudart -lcuda -L/usr/local/cuda-12.8/lib64/stubs
 
 all:
 	make libsmctrl.o
