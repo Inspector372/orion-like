@@ -76,9 +76,16 @@ pthread_mutex_t** work_queue_mutex;
 // but need to wrap functions with mutex, or remove it later.
 pthread_mutex_t start_mutex;
 
-// Streams.
+// This is for global variable kernel_ptrs_index in hooking.cpp.
+// we may need this index in threading.cpp,
+// but for now it has no use.
+pthread_mutex_t* kernel_ptrs_mutex_thr;
+
+// Streams for each clients.
 cudaStream_t** sched_streams;
 
+// Stream for fake launch, gets the highest priority.
+cudaStream_t* fake_launch_stream;
 
 
 typedef struct scheduler_arg {
@@ -145,6 +152,9 @@ void variables_setup() {
 		(*mutex_ptr)[i] = new pthread_mutex_t();
 	}
 
+	// 3. mutex for global variable kernel_ptrs_index.
+	pthread_mutex_t* kptridx_mutex_ptr = (pthread_mutex_t*)dlsym(klib, "kernel_ptrs_mutex");
+
 	// for now, those are just all. now we can use those variables in hooking.cpp.
 }
 
@@ -162,7 +172,7 @@ void create_streams() {
 
 	cudaDeviceGetStreamPriorityRange(lp, hp);
 
-	sched_streams = (cudaStream_t**)malloc((THREAD_NUM + 1) * sizeof(cudaStream_t*));
+	sched_streams = (cudaStream_t**)malloc((THREAD_NUM) * sizeof(cudaStream_t*));
 	for(int i = 0; i < THREAD_NUM - 1; i++) {
 		sched_streams[i] = (cudaStream_t*)malloc(sizeof(cudaStream_t));
 		cudaStreamCreateWithPriority(sched_streams[i], cudaStreamNonBlocking, *lp);
@@ -173,7 +183,8 @@ void create_streams() {
 	else
 		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp - 1);
 
-	cudaStreamCreateWithPriority(sched_streams[THREAD_NUM], cudaStreamNonBlocking, *hp);
+	cudaStream_t* fake_launch_stream_ptr = (cudaStream_t*)dlsym(klib, "fl_stream");
+	cudaStreamCreateWithPriority(fake_launch_stream_ptr, cudaStreamNonBlocking, *hp);
 
 	free(lp);
 	free(hp);

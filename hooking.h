@@ -9,15 +9,17 @@ enum func_type {
 
 typedef struct kernel_record
 {
-
 	const void *func;
 	dim3 gridDim;
 	dim3 blockDim;
 	void **args;
 	size_t sharedMem;
 	cudaStream_t stream;
-	volatile bool run;
-	volatile cudaStream_t sched_stream;
+	
+	size_t kptr_index;
+	size_t lidx;
+	size_t hidx;
+
 } kernel_record;
 
 typedef struct memcpy_record

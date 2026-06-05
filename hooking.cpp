@@ -13,7 +13,7 @@
 		1. where do I put fake launch?
 			- looks like work_queue need to be filled with 'real' launches.
 			- separate 'highest priority' stream need to be there.
-			- submit 'directly' to highest stream at hooker-level, with threadDim = K.
+			- submit 'directly' to highest stream at hooker-level, with blockDim.x = K.
 			- append that number K to queue.
 
 		2. clean way to 'actually' link launch
@@ -40,9 +40,9 @@
 
 	Modified logic
 	1. cudaLaunchKernel() capture
-	+. calculate blockDim * threadDim / (NUM_PARTITION)
+	+. calculate gridDim * blockDim / (NUM_PARTITION)
 	+. calculate (lidx, hidx) ranges
-	+. 'directly launch' original kernel using highest stream, with threadDIm=K(fake-launch).
+	+. 'directly launch' original kernel using highest stream, with blockDim.x=K(fake-launch).
 	2. submit func and attribute to per-client work_queue[]
 	+. submit lidx, hidx, K too.
 	3. (block until scheduler fetches) -> for other 'blocking' cuda calls!!
@@ -52,7 +52,7 @@
 		- policy design -> if not, fetch others? or stall?
 	+. fetch kernel_ptrs[K]
 	+. construct parameter pack 'arg' from original arguments.
-	+. cudaKernelLaunch EQUIVALENT TO wrapper<<<gridDim, blockDim, sharedMem, dedicated_stream>>>(arg, func, lidx, hidx)
+	+. cudaLaunchKernel EQUIVALENT TO wrapper<<<gridDim, blockDim, sharedMem, dedicated_stream>>>(arg, func, lidx, hidx)
 		- we shouldn't call this because wrapper is getting hooked!!
 
 */
@@ -72,10 +72,13 @@
 #include "hooking.h"
 
 #define THREAD_NUM 4
+#define MAX_KERNEL_PTRS 256
 
 using namespace std;
 
-bool no_hook = 1;
+bool no_hook = true;
+uint32_t kernel_ptrs_index = 0;
+pthread_mutex_t kernel_ptrs_mutex;
 
 pthread_t* thread_ids;
 queue<func_record>** work_queue;
@@ -84,6 +87,7 @@ pthread_mutex_t** work_queue_mutex;
 cudaError_t (*kernel_func)(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream);
 cudaError_t (*paraminfo_func)(const void* func, size_t paramIndex, size_t* paramOffset, size_t* paramSize);
 
+cudaStream_t fl_stream;
 
 
 // orion uses thread ids to inspect 'what is this thread's thread number'.
@@ -137,17 +141,29 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 
 	if(no_hook) {
 		// immediately run the kernel.
-
+		return (*kernel_func)(func, gridDim, blockDim, args, sharedMem, stream);
 	}
 
 	fprintf(stderr, "caught call from someone!\n");
 	int idx = get_idx();
 	fprintf(stderr, "caught call from %d!\n", idx);
 
-	// TODO: inspect kernel size and setup atomization info
-	
-	// We postpone false launch to scheduler, because it need to wait until kernel PROGRAM_ADDRESS is fetched.
+	// inspect kernel size and setup atomization info.
+	// for now, we assume they only have 1 dimension.
 
+	// TODO: dynamically adjust atom_size(need to look at lithOS paper.)
+	// TODO: expand them to 3 dimensions.
+	int atom_size = 1024;
+	int atom_num = ((gridDim.x * blockDim.x) % atom_size == 0) ? (gridDim.x * blockDim.x / atom_size + 1) : (gridDim.x * blockDim.x / atom_size);
+
+	pthread_mutex_lock(&kernel_ptrs_mutex);
+	int kptr_idx = kernel_ptrs_index;
+	kernel_ptrs_index = (kernel_ptrs_index + 1) % MAX_KERNEL_PTRS;
+	pthread_mutex_unlock(&kernel_ptrs_mutex);
+
+	// Fake launch.
+	dim3 dim_of_idx = dim3(kptr_idx, 1, 1);
+	(*kernel_func)(func, gridDim, dim_of_idx, args, sharedMem, fl_stream);
 
 	cudaError_t err = cudaSuccess;
 	kernel_record new_kernel_record;
@@ -158,11 +174,18 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	pthread_mutex_lock(work_queue_mutex[idx]);
 	
 	// queue multiple kernels of same instance
-	new_kernel_record = {func, gridDim, blockDim, args, sharedMem, stream, false, 0};
+	new_kernel_record = {func, gridDim, blockDim, args, sharedMem, stream, kptr_idx, 0, atom_size - 1};
 	union func_data new_func_data;
 	new_func_data.krecord = new_kernel_record;
 	func_record new_record = {KERNEL_RECORD, new_func_data};
-	work_queue[idx]->push(new_record);
+
+	// Atomization.
+	for(int i=0; i<atom_num; i++) {
+		work_queue[idx]->push(new_record);
+		new_record.data.krecord.lidx += atom_size;
+		new_record.data.krecord.hidx += atom_size;
+	}
+	
 
 	pthread_mutex_unlock(work_queue_mutex[idx]);
 

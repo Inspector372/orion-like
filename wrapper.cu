@@ -34,6 +34,7 @@ void initial_nothing_run() {
     cudaDeviceSynchronize();
 }
 
+/* */
 void run_wrapper() {
 
 }
