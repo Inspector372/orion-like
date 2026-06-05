@@ -231,31 +231,16 @@ void* scheduler(void* scarg) {
 			func_record frecord = (*work_queue[turn]).front();
 			kernel_record record = frecord.data.krecord;
 
-			const char* func_name_ptr;
-    		size_t func_param_count = 0;
-    		size_t func_param_offset;
-			size_t func_param_size;
-			cudaError_t param_err;	
-			printf("test starts, %p\n", getname_function);
-			param_err = (*getname_function)(&func_name_ptr, (CUfunction)record.func);
-    		printf("cudaFuncGetName test : %s\n", func_name_ptr);
-			printf("cudaFuncGetName sanity test: %s (%d)\n", cudaGetErrorString(param_err), param_err);
-			while ((param_err = (*paraminfo_function)((CUfunction)record.func, func_param_count, &func_param_offset, &func_param_size)) == cudaSuccess) {
-        		printf("cudaFuncGetParamInfo test on param[%ld] : offset %ld, size %ld\n", func_param_count, func_param_offset, func_param_size);
-        		func_param_count++;
-    		}
+			size_t kptr_idx = record.kptr_index;
+			if(kernel_ptrs[kptr_idx] != 0) {
+				// TODO: how to pass status?
+				run_wrapper((void*)kernel_function, (void*)paraminfo_function, record.func, (void*)kernel_ptrs[kptr_idx], record.gridDim, record.blockDim, record.args, record.sharedMem, *sched_streams[turn], record.lidx, record.hidx);
 
-			if (func_param_count == 0) {
-    			printf("cudaFuncGetParamInfo failed immediately: %s (%d)\n",
-           		cudaGetErrorString(param_err), param_err);
+				(*work_queue[turn]).pop();
+				fprintf(stderr, "scheduler finish job of #%d\n", turn);
+				job_count++;
 			}
 
-			// kernel wrapper needed.
-			// TODO: how to pass status?
-			cudaError_t status = (*kernel_function)(record.func, record.gridDim, record.blockDim, record.args, record.sharedMem, *sched_streams[turn]);
-			(*work_queue[turn]).pop();
-			fprintf(stderr, "scheduler finish job #%d\n", turn);
-			job_count++;
 		}
 		pthread_mutex_unlock(work_queue_mutex[turn]);
 		turn = (turn + 1) % THREAD_NUM;

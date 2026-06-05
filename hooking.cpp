@@ -189,8 +189,7 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 
 	pthread_mutex_unlock(work_queue_mutex[idx]);
 
-	// wait until kernel is resolved.
-	block(idx, work_queue_mutex, work_queue);
+	// block(idx, work_queue_mutex, work_queue);
 
     return err;
 }
