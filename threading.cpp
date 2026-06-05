@@ -44,6 +44,7 @@ threading에서는 접근 가능, 여기에서 손을 봐야하나?
 #include "kernel_example.h"
 #include "hooking.h"
 #include "wrapper.h"
+#include "libsmctrl.h"
 
 #define THREAD_NUM 4
 #define LEN 1024
@@ -150,6 +151,9 @@ void variables_setup() {
 /*
 	create THREAD_NUM streams,
 	where the last stream is high priority. (curerntly same as Orion.)
+
+	beside the last stream, we need stream for fake launch.
+	this one got the highest priority.
 	
 */
 void create_streams() {
@@ -158,17 +162,35 @@ void create_streams() {
 
 	cudaDeviceGetStreamPriorityRange(lp, hp);
 
-	sched_streams = (cudaStream_t**)malloc(THREAD_NUM * sizeof(cudaStream_t*));
+	sched_streams = (cudaStream_t**)malloc((THREAD_NUM + 1) * sizeof(cudaStream_t*));
 	for(int i = 0; i < THREAD_NUM - 1; i++) {
 		sched_streams[i] = (cudaStream_t*)malloc(sizeof(cudaStream_t));
 		cudaStreamCreateWithPriority(sched_streams[i], cudaStreamNonBlocking, *lp);
 	}
 	sched_streams[THREAD_NUM - 1] = (cudaStream_t*)malloc(sizeof(cudaStream_t));
-	cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp);
+	if(lp == hp)
+		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp);
+	else
+		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp - 1);
+
+	cudaStreamCreateWithPriority(sched_streams[THREAD_NUM], cudaStreamNonBlocking, *hp);
 
 	free(lp);
 	free(hp);
 
+}
+
+/*
+	call initial_wrapper_run() and initial_nothing_run() to assign
+	wrapper256() (and more later!), do_nothing to variables at libsmctrl.c.
+
+*/
+void assign_launch() {
+	callback_mode = 0;
+	initial_wrapper_run();
+	callback_mode = 1;
+	initial_nothing_run();
+	callback_mode = 2;
 }
 
 /*
@@ -185,6 +207,7 @@ void* scheduler(void* scarg) {
 	fprintf(stderr, "scheduler init...\n");
 
 	while(1) {
+		// return after (JOB_NUM) number of jobs.
 		if (job_count == THREAD_NUM) {
 			fprintf(stderr, "scheduler return\n");
 			return nullptr;
@@ -260,6 +283,12 @@ int main(int argc, char** argv) {
 	create_streams();
 	
 	printf("create_streams done.\n");
+
+	// Kernel Launch of wrapper and idle kernel, to assign wrapper kernel and idle kernel.
+	// These launches should not be hooked.
+	assign_launch();
+
+	printf("assign_launch done.\n");
 
 	// before spawning threads, acquire start mutex.
 	pthread_mutex_init(&start_mutex, NULL);

@@ -531,7 +531,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	}
 }
 
-static void test_func(uint32_t mode) {
+static void test_func() {
 	int (*subscribe)(uint32_t* hndl, void(*callback)(void*, int, int, const void*), void* ukwn);
 	int (*enable)(uint32_t enable, uint32_t hndl, int domain, int cbid);
 	uintptr_t* tbl_base;
