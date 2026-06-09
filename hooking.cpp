@@ -57,6 +57,8 @@
 
 */
 
+#define _GNU_SOURCE
+
 #include <dlfcn.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -77,7 +79,7 @@
 using namespace std;
 
 bool no_hook = true;
-uint32_t kernel_ptrs_index = 0;
+uint32_t kernel_ptrs_index = 1;
 pthread_mutex_t kernel_ptrs_mutex;
 
 pthread_t* thread_ids;
@@ -130,17 +132,20 @@ extern "C" {
 cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream)
 {
 	if (kernel_func == NULL) {
-		*(void **)(&kernel_func) = dlsym (RTLD_NEXT, "cudaLaunchKernel");
+		void* cudart_handle = dlopen("libcudart.so", RTLD_NOW | RTLD_GLOBAL);
+		*(void **)(&kernel_func) = dlsym (cudart_handle, "cudaLaunchKernel");
 		assert (kernel_func != NULL);
 	}
 
 	if (paraminfo_func == NULL) {
-		*(void **)(&paraminfo_func) = dlsym (RTLD_NEXT, "cudaFuncGetParamInfo");
+		void* cudart_handle = dlopen("libcudart.so", RTLD_NOW | RTLD_GLOBAL);
+		*(void **)(&paraminfo_func) = dlsym (cudart_handle, "cudaFuncGetParamInfo");
 		assert (paraminfo_func != NULL);
 	}
 
 	if(no_hook) {
 		// immediately run the kernel.
+		fprintf(stderr, "no-hook launch of %p\n", func);
 		return (*kernel_func)(func, gridDim, blockDim, args, sharedMem, stream);
 	}
 
@@ -154,11 +159,12 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	// TODO: dynamically adjust atom_size(need to look at lithOS paper.)
 	// TODO: expand them to 3 dimensions.
 	int atom_size = 1024;
-	int atom_num = ((gridDim.x * blockDim.x) % atom_size == 0) ? (gridDim.x * blockDim.x / atom_size + 1) : (gridDim.x * blockDim.x / atom_size);
+	int atom_num = ((gridDim.x * blockDim.x) % atom_size == 0) ? (gridDim.x * blockDim.x / atom_size) : (gridDim.x * blockDim.x / atom_size + 1);
 
 	pthread_mutex_lock(&kernel_ptrs_mutex);
 	int kptr_idx = kernel_ptrs_index;
 	kernel_ptrs_index = (kernel_ptrs_index + 1) % MAX_KERNEL_PTRS;
+	if(kernel_ptrs_index == 0) kernel_ptrs_index = 1;
 	pthread_mutex_unlock(&kernel_ptrs_mutex);
 
 	// Fake launch.
@@ -171,13 +177,13 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	assert(work_queue_mutex != NULL);
 	assert(work_queue != NULL);
 
-	pthread_mutex_lock(work_queue_mutex[idx]);
-	
 	// queue multiple kernels of same instance
 	new_kernel_record = {func, gridDim, blockDim, args, sharedMem, stream, kptr_idx, 0, atom_size - 1};
 	union func_data new_func_data;
 	new_func_data.krecord = new_kernel_record;
 	func_record new_record = {KERNEL_RECORD, new_func_data};
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
 
 	// Atomization.
 	for(int i=0; i<atom_num; i++) {

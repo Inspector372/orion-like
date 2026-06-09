@@ -81,6 +81,9 @@ pthread_mutex_t start_mutex;
 // but for now it has no use.
 pthread_mutex_t* kernel_ptrs_mutex_thr;
 
+// the variable that prevents hooking.
+bool* no_hook_thr;
+
 // Streams for each clients.
 cudaStream_t** sched_streams;
 
@@ -153,7 +156,10 @@ void variables_setup() {
 	}
 
 	// 3. mutex for global variable kernel_ptrs_index.
-	pthread_mutex_t* kptridx_mutex_ptr = (pthread_mutex_t*)dlsym(klib, "kernel_ptrs_mutex");
+	kernel_ptrs_mutex_thr = (pthread_mutex_t*)dlsym(klib, "kernel_ptrs_mutex");
+
+	// 4. no-hook switch.
+	no_hook_thr = (bool*)dlsym(klib, "no_hook");
 
 	// for now, those are just all. now we can use those variables in hooking.cpp.
 }
@@ -197,11 +203,13 @@ void create_streams() {
 
 */
 void assign_launch() {
+	libsmctrl_false_launch_callback();
 	callback_mode = 0;
 	initial_wrapper_run();
 	callback_mode = 1;
 	initial_nothing_run();
 	callback_mode = 2;
+	*no_hook_thr = false;
 }
 
 /*
@@ -234,6 +242,7 @@ void* scheduler(void* scarg) {
 			size_t kptr_idx = record.kptr_index;
 			if(kernel_ptrs[kptr_idx] != 0) {
 				// TODO: how to pass status?
+				fprintf(stderr, "job %d running\n", turn);
 				run_wrapper((void*)kernel_function, (void*)paraminfo_function, record.func, (void*)kernel_ptrs[kptr_idx], record.gridDim, record.blockDim, record.args, record.sharedMem, *sched_streams[turn], record.lidx, record.hidx);
 
 				(*work_queue[turn]).pop();

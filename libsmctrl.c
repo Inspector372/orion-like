@@ -510,12 +510,12 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	if (callback_mode == 0) {
 		// fetch this to wrapper ptr.
 		wrapper_ptr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
-		printf("set wrapper_ptr: %lx\n", wrapper_ptr);
+		fprintf(stderr, "set wrapper_ptr: %lx\n", wrapper_ptr);
 	}
 	else if(callback_mode == 1) {
 		nothing_ptr_upper = *upper_ptr;
 		nothing_ptr_lower = *lower_ptr;
-		printf("set nothing_ptr: %lx\n", ((uint64_t)(nothing_ptr_upper) << 32) + (uint64_t)(nothing_ptr_lower));
+		fprintf(stderr, "set nothing_ptr: %lx\n", ((uint64_t)(nothing_ptr_upper) << 32) + (uint64_t)(nothing_ptr_lower));
 	}
 	else if(callback_mode == 2) {
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
