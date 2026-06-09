@@ -4,6 +4,7 @@
     so multiple box size need to be supported later.
     current kernel will raise error if total size of parameter is bigger than 256 bytes.
 */ 
+#include <stdio.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include "wrapper.h"
@@ -42,6 +43,7 @@ void initial_nothing_run() {
     and further arguments filled with following arguments.
 
     TODO: support multiple box size.
+    TODO: move this to threading.cpp.
 */
 void run_wrapper(void* kernel_func, void* paraminfo_func, const void* target_kernel, void* target_kernel_program_addr, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream, size_t lidx, size_t hidx) {
     box256 argbox;
@@ -49,11 +51,13 @@ void run_wrapper(void* kernel_func, void* paraminfo_func, const void* target_ker
     size_t func_param_offset;
 	size_t func_param_size;
 	cudaError_t param_err;
-    
+    fprintf(stderr, "paraminfo, argsetup start\n");
     while ((param_err = (*((paraminfo_func_t*)paraminfo_func))((CUfunction)target_kernel, func_param_count, &func_param_offset, &func_param_size)) == cudaSuccess) {
+        fprintf(stderr, "memcpy %d\n", func_param_count);
         memcpy(&(argbox.data[func_param_offset]), args[func_param_count], func_param_size);
         func_param_count++;
     }
+    fprintf(stderr, "paraminfo, argsetup done\n");
 
     void* func = target_kernel_program_addr;
     size_t lidx_arg = lidx;

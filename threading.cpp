@@ -243,6 +243,7 @@ void* scheduler(void* scarg) {
 			if(kernel_ptrs[kptr_idx] != 0) {
 				// TODO: how to pass status?
 				fprintf(stderr, "job %d running\n", turn);
+				fprintf(stderr, "kernel_function: %p, paraminfo_function: %p, sched_streams[turn]: %p\n", (void*)kernel_function, (void*)paraminfo_function, *sched_streams[turn]);
 				run_wrapper((void*)kernel_function, (void*)paraminfo_function, record.func, (void*)kernel_ptrs[kptr_idx], record.gridDim, record.blockDim, record.args, record.sharedMem, *sched_streams[turn], record.lidx, record.hidx);
 
 				(*work_queue[turn]).pop();

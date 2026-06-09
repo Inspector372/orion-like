@@ -1,6 +1,6 @@
 
 libsmctrl.o:
-	gcc libsmctrl.c -c -o libsmctrl.o -fPIC -I/usr/local/cuda-12.8/targets/x86_64-linux/include
+	gcc libsmctrl.c -c -o libsmctrl.o -fPIC -lcuda -L/usr/local/cuda-12.8/lib64/stubs
 
 libsmctrl.a:
 	ar rcs libsmctrl.a libsmctrl.o
@@ -15,7 +15,7 @@ wrapper.o:
 	nvcc -cudart=shared -std=c++11 -c -o wrapper.o wrapper.cu
 
 threading: 
-	g++ threading.cpp kernel_example.o wrapper.o -o threading libsmctrl.a -ldl -pthread -lcudart -lcuda -L/usr/local/cuda-12.8/lib64/stubs
+	nvcc -Xcompiler -pthread threading.cpp kernel_example.o wrapper.o -o threading libsmctrl.a -ldl -lcudart -lcuda -L/usr/local/cuda-12.8/lib64/stubs
 
 all:
 	make libsmctrl.o
