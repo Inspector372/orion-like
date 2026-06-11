@@ -72,7 +72,7 @@ extern int libsmctrl_get_tpc_info(uint32_t* num_tpcs, int dev);
 // Identical to above, but for a CUDA device ID. Does not require `nvdebug`.
 extern int libsmctrl_get_tpc_info_cuda(uint32_t* num_tpcs, int cuda_dev);
 
-extern void libsmctrl_test(uint32_t mode);
+extern void libsmctrl_test();
 
 extern uint64_t kernel_ptrs[1000];
 extern uint32_t test_run;

@@ -178,7 +178,7 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	assert(work_queue != NULL);
 
 	// queue multiple kernels of same instance
-	new_kernel_record = {func, gridDim, blockDim, args, sharedMem, stream, kptr_idx, 0, atom_size - 1};
+	new_kernel_record = {func, gridDim, blockDim, args, sharedMem, stream, kptr_idx, 0, atom_size};
 	union func_data new_func_data;
 	new_func_data.krecord = new_kernel_record;
 	func_record new_record = {KERNEL_RECORD, new_func_data};

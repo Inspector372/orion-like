@@ -9,6 +9,7 @@
 #include <cuda_runtime.h>
 #include "wrapper.h"
 
+
 __global__ void wrapper256(box256 arg, void* func, uint32_t lidx, uint32_t hidx) {
     // Index filtering.
     int workIndex = threadIdx.x + blockDim.x * blockIdx.x;

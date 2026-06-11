@@ -48,7 +48,7 @@ threading에서는 접근 가능, 여기에서 손을 봐야하나?
 #include "libsmctrl.h"
 
 #define THREAD_NUM 4
-#define LEN 1024
+#define LEN 4532
 
 using namespace std;
 
@@ -258,7 +258,7 @@ void run_wrapper(void* kernel_func, void* paraminfo_func, const void* target_ker
 void* scheduler(void* scarg) {
 	int turn = 0;
 	int job_count = 0;
-	int total_job = THREAD_NUM; // currently only 1 kernel is launched per thread.
+	int total_job = THREAD_NUM * 5; // currently only 1 kernel is launched per thread.
 
 	pthread_mutex_lock(&start_mutex);
     pthread_mutex_unlock(&start_mutex);
@@ -266,7 +266,7 @@ void* scheduler(void* scarg) {
 
 	while(1) {
 		// return after (JOB_NUM) number of jobs.
-		if (job_count == THREAD_NUM) {
+		if (job_count == total_job) {
 			fprintf(stderr, "scheduler return\n");
 			return nullptr;
 		}

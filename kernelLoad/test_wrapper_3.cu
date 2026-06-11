@@ -106,6 +106,7 @@ int main() {
     mul<<<4, 256>>>(nullptr, nullptr, nullptr, 0);
     complicated<<<4, 256>>>(0.0, nullptr, nullptr, empty_struct, empty_float4, 0);
     cudaDeviceSynchronize();
+    printf("%p %p %p %p\n", (void *)kernel_ptrs[0], (void *)kernel_ptrs[1], (void *)kernel_ptrs[2], (void *)kernel_ptrs[3]);
 
 
     // add100 test.
