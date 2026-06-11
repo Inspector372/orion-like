@@ -9,13 +9,16 @@
 #include <cuda_runtime.h>
 #include "wrapper.h"
 
-__global__ void wrapper256(box256 arg, void* func, size_t lidx, size_t hidx) {
+__global__ void wrapper256(box256 arg, void* func, uint32_t lidx, uint32_t hidx) {
     // Index filtering.
     int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    if (workIndex == 3) {
+        printf("sanity check, func = %p, lidx = %d, hidx = %d\n", func, lidx, hidx);
+    }
     if (workIndex < lidx || workIndex >= hidx) return;
 
     // theory: "move" the context to actual kernel.
-    (func_ptr_t(func))();
+    ((func_ptr_t)func)();
 }
 
 __global__ void do_nothing() {
@@ -36,39 +39,3 @@ void initial_nothing_run() {
     cudaDeviceSynchronize();
 }
 
-/*
-    invoke paraminfo_func to target_kernel, to get information about **args.
-    read arguments, put in wrapper box in arranged manner.
-    then invoke kernel_func, with wrapper as its func arguments,
-    and further arguments filled with following arguments.
-
-    TODO: support multiple box size.
-    TODO: move this to threading.cpp.
-*/
-void run_wrapper(void* kernel_func, void* paraminfo_func, const void* target_kernel, void* target_kernel_program_addr, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream, size_t lidx, size_t hidx) {
-    box256 argbox;
-    size_t func_param_count = 0;
-    size_t func_param_offset;
-	size_t func_param_size;
-	cudaError_t param_err;
-    fprintf(stderr, "paraminfo, argsetup start\n");
-    while ((param_err = (*((paraminfo_func_t*)paraminfo_func))((CUfunction)target_kernel, func_param_count, &func_param_offset, &func_param_size)) == cudaSuccess) {
-        fprintf(stderr, "memcpy %d\n", func_param_count);
-        memcpy(&(argbox.data[func_param_offset]), args[func_param_count], func_param_size);
-        func_param_count++;
-    }
-    fprintf(stderr, "paraminfo, argsetup done\n");
-
-    void* func = target_kernel_program_addr;
-    size_t lidx_arg = lidx;
-    size_t hidx_arg = hidx;
-
-    void* kernel_args[] = {
-        &argbox,
-        &func,
-        &lidx_arg,
-        &hidx_arg
-    };
-
-    (*((kernel_func_t*)kernel_func))((const void*)wrapper256, gridDim, blockDim, kernel_args, sharedMem, stream);
-}

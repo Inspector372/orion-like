@@ -519,9 +519,11 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	}
 	else if(callback_mode == 2) {
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
-		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx\n", program_addr, wrapper_ptr);
-		if(program_addr == wrapper_ptr) return;
-		fprintf(stderr, "call nothing\n");
+		if(program_addr == wrapper_ptr) {
+			fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, real launch return\n", program_addr, wrapper_ptr);
+			return;
+		}
+		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, fake launch return, calling nothing\n", program_addr, wrapper_ptr);
 		// store PROGRAM_ADDRESS.
         kernel_ptrs[*dim0_ptr] = program_addr;
 

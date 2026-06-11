@@ -15,7 +15,7 @@ __global__ void addKernel(int* a, int* b, int* out, int N) {
 void addCheck(int* h_A, int* h_B, int* h_out, int N) {
     for(int i = 0; i < N; i++) {
         if(h_A[i] + h_B[i] != h_out[i]) {
-            fprintf(stderr, "mismatch at %d\n", i);
+            fprintf(stderr, "mismatch at %d, h_A[%d]=%d, h_b[%d]=%d, h_out[%d]=%d\n", i, i, h_A[i], i, h_B[i], i, h_out[i]);
             return;
         }
     }
@@ -45,6 +45,8 @@ extern "C" void* addKernel_wrap(void* arg) {
 
     int threads = 256;
     int blocks = (N + threads - 1) / threads;
+    cudaError_t err = cudaGetLastError();
+    fprintf(stderr, "PRE: Error: %s\n", cudaGetErrorString(err));
 
     addKernel<<<blocks, threads>>>(d_A, d_B, d_out, N);
 
@@ -58,6 +60,9 @@ extern "C" void* addKernel_wrap(void* arg) {
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_out);
+
+    err = cudaGetLastError();
+    fprintf(stderr, "POST: Error: %s\n", cudaGetErrorString(err));
 
     return nullptr;
 }

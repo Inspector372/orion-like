@@ -35,6 +35,7 @@ threading에서는 접근 가능, 여기에서 손을 봐야하나?
 #include <pthread.h>
 #include <iostream>
 #include <queue>
+#include <cstring>
 
 #include <cuda_runtime.h>
 #include <cuda.h>
@@ -213,6 +214,44 @@ void assign_launch() {
 }
 
 /*
+    invoke paraminfo_func to target_kernel, to get information about **args.
+    read arguments, put in wrapper box in arranged manner.
+    then invoke kernel_func, with wrapper as its func arguments,
+    and further arguments filled with following arguments.
+
+    TODO: support multiple box size.
+    TODO: move this to threading.cpp.
+*/
+void run_wrapper(void* kernel_func, void* paraminfo_func, const void* target_kernel, void* target_kernel_program_addr, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream, size_t lidx, size_t hidx) {
+    box256 argbox;
+    size_t func_param_count = 0;
+    size_t func_param_offset;
+	size_t func_param_size;
+	cudaError_t param_err;
+    fprintf(stderr, "paraminfo, argsetup start\n");
+    while ((param_err = (((paraminfo_func_t)paraminfo_func))((CUfunction)target_kernel, func_param_count, &func_param_offset, &func_param_size)) == cudaSuccess) {
+        fprintf(stderr, "memcpy %d, size = %d, offset = %d\n", func_param_count, func_param_size, func_param_offset);
+        memcpy(&(argbox.data[func_param_offset]), args[func_param_count], func_param_size);
+        func_param_count++;
+    }
+    fprintf(stderr, "paraminfo, argsetup done\n");
+
+    void* func = target_kernel_program_addr;
+    uint32_t lidx_arg = lidx;
+    uint32_t hidx_arg = hidx;
+
+    void* kernel_args[] = {
+        &argbox,
+        &func,
+        &lidx_arg,
+        &hidx_arg
+    };
+
+    (((kernel_func_t)kernel_func))((const void*)wrapper256, gridDim, blockDim, kernel_args, sharedMem, stream);
+}
+
+
+/*
 	for now, the scheduler runs in round-robin fashion.
 	no priority, no streams, just running.
 */
@@ -307,6 +346,11 @@ int main(int argc, char** argv) {
 		h_As[i] = (int*)malloc(sizeof(int) * LEN);
 		h_Bs[i] = (int*)malloc(sizeof(int) * LEN);
 		h_outs[i] = (int*)malloc(sizeof(int) * LEN);
+		for(int j = 0; j < LEN; j++) {
+			h_As[i][j] = j;
+			h_Bs[i][j] = j;
+			h_outs[i][j] = 0;
+		}
 		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
 		pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
