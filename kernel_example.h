@@ -10,3 +10,5 @@ typedef struct addKernel_arg {
 } addKernel_arg;
 
 extern "C" void* addKernel_wrap(void* arg);
+
+extern "C" void* test_cublas(void* arg);

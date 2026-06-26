@@ -352,7 +352,7 @@ int main(int argc, char** argv) {
 			h_outs[i][j] = 0;
 		}
 		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
-		pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
+		pthread_create(&threads[i], NULL, test_cublas, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 

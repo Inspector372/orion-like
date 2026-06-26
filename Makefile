@@ -9,13 +9,15 @@ hooking.so:
 	g++ -fPIC hooking.cpp -o hooking.so -shared -ldl
 
 kernel_example.o: 
-	nvcc -cudart=shared -std=c++11 -c -o kernel_example.o kernel_example.cu
+	nvcc -cudart=shared -std=c++11 -c -o kernel_example.o kernel_example.cu -lcublasLt
 
+# -G option is important, this ignores some compiler optimization,
+# which leads to failure of kernel-inside-kernel launch.
 wrapper.o: 
 	nvcc -G -cudart=shared -std=c++11 -c -o wrapper.o wrapper.cu
 
 threading: 
-	nvcc -Xcompiler -pthread threading.cpp kernel_example.o wrapper.o -o threading libsmctrl.a -ldl -lcudart -lcuda -L/usr/local/cuda-12.8/lib64/stubs
+	nvcc -Xcompiler -pthread threading.cpp kernel_example.o wrapper.o -o threading libsmctrl.a -ldl -lcudart -lcuda -lcublasLt -L/usr/local/cuda-12.8/lib64/stubs
 
 all:
 	make libsmctrl.o
