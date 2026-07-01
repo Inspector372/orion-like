@@ -1,5 +1,5 @@
 /*
-    env CUDA_VISIBLE_DEVICES=5 LD_PRELOAD=./hooklaunch.so ./kernel
+    env CUDA_VISIBLE_DEVICES=0 LD_PRELOAD=./hooklaunch.so ./kernel
 
     attempt to hook the whole library
     https://github.com/open-neutrino/neutrino/blob/main/neutrino/src/preload.c
