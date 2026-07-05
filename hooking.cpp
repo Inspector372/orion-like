@@ -126,8 +126,29 @@ void block(int idx, pthread_mutex_t** mutexes, queue<func_record>** kqueues) {
 	** intercept part **
 	most of those codes are just ctrl CVed from Orion.
 	for now, only cudaLaunchKernel is intercepted.
+
+	Now I can intercept cuLaunchKernel too, thanks to 
+	curtSCHED: Architecture-Independent Real-Time GPU Scheduling via Statistical Deferrable Servers by Hao Zhang, Frank Muelle(https://github.com/zhanghao5/curtSCHED/blob/main/cusched.cpp)
+
+	cuda c++ resolves names dynamically using this path:
+	1. dlsym() on cuGetProcAddress_v2
+	2. cuGetProcAddress_v2 on cuGetProcAddress
+	3. cuGetProcAddress on cuLaunchKernel(and a lot of other cuda driver functions)
+
+	So what we do is:
+	1. hooked dlsym() and return our own (hook)cuGetProcAddress_v2 address.
+	2. cuGetProcAddress_v2() is invoked and we hook it.
+	3. hooked cuGetProcAddress_v2() and return our own (hook)cuGetProcAddress address.
+	4. cuGetProcAddress() is invoked and we hook it.
+	5. hooked cuGetProcAddress() and return our own (hook)cuLaunchKernel address.
+	6. further all cuLaunchKernel is hooked.
+
 */
 extern "C" {
+
+
+
+
 
 cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream)
 {
