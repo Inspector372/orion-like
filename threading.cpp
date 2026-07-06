@@ -36,6 +36,7 @@ threading에서는 접근 가능, 여기에서 손을 봐야하나?
 #include <iostream>
 #include <queue>
 #include <cstring>
+#include <time.h>
 
 #include <cuda_runtime.h>
 #include <cuda.h>
@@ -52,16 +53,9 @@ threading에서는 접근 가능, 여기에서 손을 봐야하나?
 
 using namespace std;
 
-cudaError_t (*kernel_function)(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream);
-cudaError_t (*memcpy_function)(void* dst, const void* src, size_t count, enum cudaMemcpyKind kind);
-cudaError_t (*memcpy_async_function)(void* dst, const void* src, size_t count, enum cudaMemcpyKind kind, cudaStream_t stream);
-cudaError_t (*malloc_function)(void** devPtr, size_t size);
-cudaError_t (*free_function)(void* devPtr);
-cudaError_t (*memset_function)(void* devPtr, int  value, size_t count);
-cudaError_t (*memset_async_function)(void* devPtr, int  value, size_t count, cudaStream_t stream);
+CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 
-cudaError_t (*getname_function)(const char** name, CUfunction func);
-cudaError_t (*paraminfo_function)(CUfunction func, size_t paramIndex, size_t* paramOffset, size_t* paramSize);
+CUresult (*actual_cuFuncGetParamInfo)(CUfunction, size_t, size_t*, size_t*);
 
 
 void* klib;
@@ -69,7 +63,7 @@ void* klib;
 
 // Work queue for N client threads.
 // Need mutex lock for those.
-queue<func_record>** work_queue;
+queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 
 // This is for letting threads stall before all setups are done.
@@ -91,6 +85,8 @@ cudaStream_t** sched_streams;
 // Stream for fake launch, gets the highest priority.
 cudaStream_t* fake_launch_stream;
 
+time_t start_os;
+
 
 typedef struct scheduler_arg {
 	int PLACEHOLDER;
@@ -98,42 +94,16 @@ typedef struct scheduler_arg {
 
 /* imported from Orion, RTLD_DEFAULT -> handle */
 void register_functions() {
-	void* handle = dlopen("libcudart.so", RTLD_NOW | RTLD_LOCAL);
+	void* handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
 
     // for kernel
-	*(void **)(&kernel_function) = dlsym(handle, "cudaLaunchKernel");
-	assert(kernel_function != NULL);
-
-	// for memcpy
-	*(void **)(&memcpy_function) = dlsym (handle, "cudaMemcpy");
-	assert(memcpy_function != NULL);
-
-	// for memcpy_async
-	*(void **)(&memcpy_async_function) = dlsym (handle, "cudaMemcpyAsync");
-	assert(memcpy_async_function != NULL);
-
-	// for malloc
-	*(void **)(&malloc_function) = dlsym (handle, "cudaMalloc");
-	assert(malloc_function != NULL);
-
-	// for free
-	*(void **)(&free_function) = dlsym (handle, "cudaFree");
-	assert(free_function != NULL);
-
-	// for memset
-	*(void **)(&memset_function) = dlsym (handle, "cudaMemset");
-	assert (memset_function != NULL);
-
-	// for memset_async
-	*(void **)(&memset_async_function) = dlsym (handle, "cudaMemsetAsync");
-	assert (memset_async_function != NULL);
+	*(void **)(&actual_cuLaunchKernel) = dlsym(handle, "cuLaunchKernel");
+	assert(actual_cuLaunchKernel != NULL);
 
 
 	// for inspections, we need to load those functions too.
-	*(void **)(&getname_function) = dlsym (handle, "cudaFuncGetName");
-	assert (getname_function != NULL);
-	*(void **)(&paraminfo_function) = dlsym (handle, "cudaFuncGetParamInfo");
-	assert (paraminfo_function != NULL);
+	*(void **)(&actual_cuFuncGetParamInfo) = dlsym (handle, "cuFuncGetParamInfo");
+	assert (actual_cuFuncGetParamInfo != NULL);
 
 }
 
@@ -141,11 +111,11 @@ void variables_setup() {
 	klib = dlopen("./hooking.so", RTLD_NOW | RTLD_GLOBAL);
 
 	// 1. queue for each thread.
-	queue<func_record>*** work_queue_ptr = (queue<func_record>***)dlsym(klib, "work_queue");
-	*work_queue_ptr = (queue<func_record>**)malloc(THREAD_NUM * sizeof(queue<func_record>*));
+	queue<queue_record>*** work_queue_ptr = (queue<queue_record>***)dlsym(klib, "work_queue");
+	*work_queue_ptr = (queue<queue_record>**)malloc(THREAD_NUM * sizeof(queue<queue_record>*));
 	work_queue = *work_queue_ptr;
 	for (int i = 0; i < THREAD_NUM; i++) {
-		(*work_queue_ptr)[i] = new queue<func_record>();
+		(*work_queue_ptr)[i] = new queue<queue_record>();
 	}
 
 	// 2. mutexes for queues.
@@ -222,19 +192,24 @@ void assign_launch() {
     TODO: support multiple box size.
     TODO: move this to threading.cpp.
 */
-void run_wrapper(void* kernel_func, void* paraminfo_func, const void* target_kernel, void* target_kernel_program_addr, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream, size_t lidx, size_t hidx) {
+void run_wrapper(const void* target_kernel, void* target_kernel_program_addr,
+	unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
+    unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
+    unsigned int sharedMemBytes, CUstream hStream, void** kernelParams,
+	void** extra, size_t lidx, size_t hidx)
+{
     box256 argbox;
     size_t func_param_count = 0;
     size_t func_param_offset;
 	size_t func_param_size;
-	cudaError_t param_err;
-    fprintf(stderr, "paraminfo, argsetup start\n");
-    while ((param_err = (((paraminfo_func_t)paraminfo_func))((CUfunction)target_kernel, func_param_count, &func_param_offset, &func_param_size)) == cudaSuccess) {
-        fprintf(stderr, "memcpy %d, size = %d, offset = %d\n", func_param_count, func_param_size, func_param_offset);
-        memcpy(&(argbox.data[func_param_offset]), args[func_param_count], func_param_size);
+	CUresult param_err;
+    // fprintf(stderr, "paraminfo, argsetup start\n");
+    while ((param_err = (*actual_cuFuncGetParamInfo)((CUfunction)target_kernel, func_param_count, &func_param_offset, &func_param_size)) == CUDA_SUCCESS) {
+        // fprintf(stderr, "memcpy %ld, size = %ld, offset = %ld\n", func_param_count, func_param_size, func_param_offset);
+        memcpy(&(argbox.data[func_param_offset]), kernelParams[func_param_count], func_param_size);
         func_param_count++;
     }
-    fprintf(stderr, "paraminfo, argsetup done\n");
+    // fprintf(stderr, "paraminfo, argsetup done\n");
 
     void* func = target_kernel_program_addr;
     uint32_t lidx_arg = lidx;
@@ -247,7 +222,13 @@ void run_wrapper(void* kernel_func, void* paraminfo_func, const void* target_ker
         &hidx_arg
     };
 
-    (((kernel_func_t)kernel_func))((const void*)wrapper256, gridDim, blockDim, kernel_args, sharedMem, stream);
+	if(wrapper256_handle == NULL) {
+		cudaFunction_t handle_ptr;
+		cudaGetFuncBySymbol(&handle_ptr, (const void*)wrapper256);
+		wrapper256_handle = (CUfunction)handle_ptr;
+	}
+
+    (*actual_cuLaunchKernel)(wrapper256_handle, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernel_args, extra);
 }
 
 
@@ -267,7 +248,11 @@ void* scheduler(void* scarg) {
 	while(1) {
 		// return after (JOB_NUM) number of jobs.
 		if (job_count == total_job) {
-			fprintf(stderr, "scheduler return\n");
+			fprintf(stderr, "scheduler return - expected %d jobs completed\n", job_count);
+			return nullptr;
+		}
+		else if (time(NULL) - start_os > 60) {
+			fprintf(stderr, "scheduler return - total %d jobs completed, timeout of 60 second\n", job_count);
 			return nullptr;
 		}
 		// pop one from queue, and assign.
@@ -275,15 +260,23 @@ void* scheduler(void* scarg) {
 		if(!(*work_queue[turn]).empty()) {
 			// this routine should be something like assign_job(),
 			// and changed when we intercept other cuda calls.
-			func_record frecord = (*work_queue[turn]).front();
-			kernel_record record = frecord.data.krecord;
+
+			// TODO: add branch for other record types.
+			// currently all types are r_cuLaunchKernel.
+			queue_record qrecord = (*work_queue[turn]).front();
+			record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
 
 			size_t kptr_idx = record.kptr_index;
+			// TODO: set kernel_ptrs[kptr_idx] = 0 after launching all atoms.
 			if(kernel_ptrs[kptr_idx] != 0) {
 				// TODO: how to pass status?
 				fprintf(stderr, "job %d running\n", turn);
-				fprintf(stderr, "kernel_function: %p, paraminfo_function: %p, sched_streams[turn]: %p\n", (void*)kernel_function, (void*)paraminfo_function, *sched_streams[turn]);
-				run_wrapper((void*)kernel_function, (void*)paraminfo_function, record.func, (void*)kernel_ptrs[kptr_idx], record.gridDim, record.blockDim, record.args, record.sharedMem, *sched_streams[turn], record.lidx, record.hidx);
+				// fprintf(stderr, "sched_streams[turn]: %p\n", *sched_streams[turn]);
+				run_wrapper(record.f, (void*)kernel_ptrs[kptr_idx],
+							record.gridDimX, record.gridDimY, record.gridDimZ,
+							record.blockDimX, record.blockDimY, record.blockDimZ,
+							record.sharedMemBytes, (CUstream)*sched_streams[turn], record.kernelParams,
+							record.extra, record.lidx, record.hidx);
 
 				(*work_queue[turn]).pop();
 				fprintf(stderr, "scheduler finish job of #%d\n", turn);
@@ -352,7 +345,7 @@ int main(int argc, char** argv) {
 			h_outs[i][j] = 0;
 		}
 		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
-		pthread_create(&threads[i], NULL, test_cublas, (void *)&args[i]);
+		pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 
@@ -370,6 +363,7 @@ int main(int argc, char** argv) {
 	printf("created scheduler: id %ld\n", threads[scheduler_idx]);
 
 	// **unblock** every threads and start launching.
+	start_os = time(NULL);
 	printf("launching...\n");
 	pthread_mutex_unlock(&start_mutex);
 

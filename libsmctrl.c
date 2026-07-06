@@ -523,7 +523,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 			fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, real launch return\n", program_addr, wrapper_ptr);
 			return;
 		}
-		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, fake launch return, calling nothing\n", program_addr, wrapper_ptr);
+		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, fake launch(kernel_ptr = nothing_ptr), kernel_ptrs[%d] mod\n", program_addr, wrapper_ptr, *dim0_ptr);
 		// store PROGRAM_ADDRESS.
         kernel_ptrs[*dim0_ptr] = program_addr;
 

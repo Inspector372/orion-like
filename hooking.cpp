@@ -57,8 +57,6 @@
 
 */
 
-#define _GNU_SOURCE
-
 #include <dlfcn.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -70,6 +68,7 @@
 #include <queue>
 #include <pthread.h>
 #include <assert.h>
+#include <string.h>
 
 #include "hooking.h"
 
@@ -83,13 +82,20 @@ uint32_t kernel_ptrs_index = 1;
 pthread_mutex_t kernel_ptrs_mutex;
 
 pthread_t* thread_ids;
-queue<func_record>** work_queue;
+queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
-
-cudaError_t (*kernel_func)(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream);
-cudaError_t (*paraminfo_func)(const void* func, size_t paramIndex, size_t* paramOffset, size_t* paramSize);
-
 cudaStream_t fl_stream;
+
+
+CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
+
+typedef CUresult (*cuGetProcAddress_t)(const char*, void**, int, unsigned int, void*);
+cuGetProcAddress_t real_cuGetProcAddress = NULL;
+cuGetProcAddress_t real_cuGetProcAddress_v2 = NULL;
+void* (*real_dlsym)(void*, const char*) = NULL;
+void* cu_handle = NULL;
+
+
 
 
 // orion uses thread ids to inspect 'what is this thread's thread number'.
@@ -97,7 +103,7 @@ cudaStream_t fl_stream;
 int get_idx() {
 	assert(thread_ids != NULL);
 	pthread_t tid = pthread_self();
-	fprintf(stderr, "tid = %ld\n", tid);
+	// fprintf(stderr, "tid = %ld\n", tid);
 	// pid_t tid = syscall(SYS_gettid);
 	int idx = -1;
 	for (int i = 0; i < THREAD_NUM; i++) {
@@ -107,12 +113,12 @@ int get_idx() {
 		}
 	}
 	assert(idx != -1);
-	fprintf(stderr, "idx = %d\n", idx);
+	// fprintf(stderr, "idx = %d\n", idx);
 	return idx;
 }
 
 // directly adapted from Orion.
-void block(int idx, pthread_mutex_t** mutexes, queue<func_record>** kqueues) {
+void block(int idx, pthread_mutex_t** mutexes, queue<queue_record>** kqueues) {
 	while (1) {
 		pthread_mutex_lock(mutexes[idx]);
 		volatile int sz = kqueues[idx]->size();
@@ -146,22 +152,174 @@ void block(int idx, pthread_mutex_t** mutexes, queue<func_record>** kqueues) {
 */
 extern "C" {
 
+CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
+                        unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
+                        unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
+    if (real_cuLaunchKernel == NULL) {
+        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+        real_cuLaunchKernel = (CUresult (*)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**))real_dlsym(cu_handle, "cuLaunchKernel");
+        if(real_cuLaunchKernel == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernel == NULL\n");
+        }
+        if(real_cuLaunchKernel == cuLaunchKernel) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernel == cuLaunchKernel\n");
+        }
+    }
+
+	if(no_hook) {
+		// immediately run the kernel.
+		fprintf(stderr, "[cuHook] no-hook launch of %p\n", f);
+		return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
+	}
+
+	fprintf(stderr, "[cuHook] caught call from someone!\n");
+	int idx = get_idx();
+	fprintf(stderr, "[cuHook] caught call from %d!\n", idx);
+
+	// inspect kernel size and setup atomization info.
+	// for now, we assume they only have 1 dimension.
+
+	// TODO: dynamically adjust atom_size(need to look at lithOS paper.)
+	// TODO: expand them to 3 dimensions.
+	int atom_size = 1024;
+	int atom_num = ((gridDimX * blockDimX) % atom_size == 0) ? (gridDimX * blockDimX / atom_size) : (gridDimX * blockDimX / atom_size + 1);
 
 
+	// TODO: stall here if kernel_ptrs[] is full, waiting previous jobs to be ended.
+	pthread_mutex_lock(&kernel_ptrs_mutex);
+	int kptr_idx = kernel_ptrs_index;
+	kernel_ptrs_index = (kernel_ptrs_index + 1) % MAX_KERNEL_PTRS;
+	if(kernel_ptrs_index == 0) kernel_ptrs_index = 1;
+	pthread_mutex_unlock(&kernel_ptrs_mutex);
+
+	// Fake launch.
+	real_cuLaunchKernel(f, 1, 1, 1, kptr_idx, 1, 1, sharedMemBytes, (CUstream)fl_stream, kernelParams, extra);
+
+	CUresult err = CUDA_SUCCESS;
+	record_cuLaunchKernel new_record;
+	
+	assert(work_queue_mutex != NULL);
+	assert(work_queue != NULL);
+
+	// queue multiple kernels of same instance
+	new_record = {f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra, kptr_idx, 0, atom_size};
+	union record_data new_record_data;
+	new_record_data.r_cuLaunchKernel = new_record;
+	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+
+	// Atomization.
+	for(int i=0; i<atom_num; i++) {
+		work_queue[idx]->push(new_qrecord);
+		new_qrecord.data.r_cuLaunchKernel.lidx += atom_size;
+		new_qrecord.data.r_cuLaunchKernel.hidx += atom_size;
+	}
+	
+
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+
+	block(idx, work_queue_mutex, work_queue);
+
+    return err;
+
+    // return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
+}
+
+CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
+    fprintf(stderr, "[HOOK v1] Inside cuGetProcAddress looking for: %s\n", symbol);
+
+    if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
+        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel pointer assignment!\n");
+        *pfn = (void*)cuLaunchKernel;
+        return CUDA_SUCCESS;
+    }
+
+    // Call the real cuGetProcAddress if it's anything else
+    if (real_cuGetProcAddress == NULL) {
+        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+        real_cuGetProcAddress = (cuGetProcAddress_t)dlvsym(RTLD_NEXT, "cuGetProcAddress", "RTLD_NEXT"); 
+        if(!real_cuGetProcAddress) {
+             real_cuGetProcAddress = (cuGetProcAddress_t)real_dlsym(cu_handle, "cuGetProcAddress");
+        }
+    }
+    return real_cuGetProcAddress(symbol, pfn, cudaVersion, flags, symbolStatus);
+}
+
+CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
+    fprintf(stderr, "[HOOK v2] Inside cuGetProcAddress_v2 looking for: %s\n", symbol);
+
+    if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
+        fprintf(stderr, "[HOOK v2] Hijacking cuLaunchKernel pointer assignment!\n");
+        *pfn = (void*)cuLaunchKernel;
+        return CUDA_SUCCESS;
+    }
+
+    if (symbol && strcmp(symbol, "cuGetProcAddress") == 0) {
+        fprintf(stderr, "[HOOK v2] Hijacking cuGetProcAddress pointer assignment!\n");
+        *pfn = (void*)my_cuGetProcAddress;
+        return CUDA_SUCCESS;
+    }
+
+    // Call the real cuGetProcAddress if it's anything else
+    if (real_cuGetProcAddress_v2 == NULL) {
+        if(cu_handle == NULL) {
+            cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+            if(cu_handle == NULL) {
+                fprintf(stderr, "[HOOK v2] WARNING: cu_handle == NULL\n");
+            }
+        }
+        real_cuGetProcAddress_v2 = (cuGetProcAddress_t)dlvsym(RTLD_NEXT, "cuGetProcAddress_v2", "RTLD_NEXT"); 
+        if(!real_cuGetProcAddress_v2) {
+             real_cuGetProcAddress_v2 = (cuGetProcAddress_t)real_dlsym(cu_handle, "cuGetProcAddress_v2");
+        }
+        if(real_cuGetProcAddress_v2 == NULL) {
+            fprintf(stderr, "[HOOK v2] WARNING: real_cuGetProcAddress_v2 == NULL\n");
+        }
+    }
+    return real_cuGetProcAddress(symbol, pfn, cudaVersion, flags, symbolStatus);
+}
+
+void* dlsym(void* handle, const char* symbol) {
+    fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s.\n", symbol);
+    // Bootstrap the real dlsym using dlvsym to avoid recursion
+    if (real_dlsym == NULL) {
+        real_dlsym = (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
+        if (real_dlsym == NULL) {
+            real_dlsym = (void* (*)(void*, const char*))dlopen("libdl.so.2", RTLD_NOW); 
+        }
+    }
+
+    // CRUCIAL: Intercept libcudart trying to look up cuGetProcAddress
+    if (symbol && (strcmp(symbol, "cuGetProcAddress") == 0)) {
+        fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
+        
+        // Save the real function pointer from the requested handle before we fake the return
+        real_cuGetProcAddress = (cuGetProcAddress_t)real_dlsym(handle, symbol);
+        
+        return (void*)my_cuGetProcAddress;
+    }
+
+    if (symbol && (strcmp(symbol, "cuGetProcAddress_v2") == 0)) {
+        fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
+        
+        // Save the real function pointer from the requested handle before we fake the return
+        real_cuGetProcAddress = (cuGetProcAddress_t)real_dlsym(handle, symbol);
+        
+        return (void*)my_cuGetProcAddress_v2;
+    }
+
+    return real_dlsym(handle, symbol);
+}
 
 
+/*
 cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream)
 {
 	if (kernel_func == NULL) {
 		void* cudart_handle = dlopen("libcudart.so", RTLD_NOW | RTLD_GLOBAL);
 		*(void **)(&kernel_func) = dlsym (cudart_handle, "cudaLaunchKernel");
 		assert (kernel_func != NULL);
-	}
-
-	if (paraminfo_func == NULL) {
-		void* cudart_handle = dlopen("libcudart.so", RTLD_NOW | RTLD_GLOBAL);
-		*(void **)(&paraminfo_func) = dlsym (cudart_handle, "cudaFuncGetParamInfo");
-		assert (paraminfo_func != NULL);
 	}
 
 	if(no_hook) {
@@ -220,5 +378,6 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 
     return err;
 }
+*/
 
 }
