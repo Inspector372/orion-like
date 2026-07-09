@@ -34,6 +34,7 @@ uint64_t wrapper_ptr;
 uint32_t nothing_ptr_upper;
 uint32_t nothing_ptr_lower;
 uint64_t kernel_ptrs[1000];
+uint32_t offsets[1000];
 uint32_t callback_mode = 0;
 // /*** CUDA Globals Manipulation. CUDA 10.2 only ***/
 
@@ -507,6 +508,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
 	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
 	uint16_t *dim0_ptr = (uint16_t*)(**((char***)in_params + 8) + 74);
+	uint8_t *offset_ptr = (uint32_t*)(**((char***)in_params + 8) + 81);
 	if (callback_mode == 0) {
 		// fetch this to wrapper ptr.
 		wrapper_ptr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
@@ -520,10 +522,11 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	else if(callback_mode == 2) {
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
 		if(program_addr == wrapper_ptr) {
-			fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, real launch return\n", program_addr, wrapper_ptr);
+			// fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, etc: %ld, real launch return\n", program_addr, wrapper_ptr, *offset_ptr);
+			// *offset_ptr = 64;
 			return;
 		}
-		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, fake launch(kernel_ptr = nothing_ptr), kernel_ptrs[%d] mod\n", program_addr, wrapper_ptr, *dim0_ptr);
+		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, etc: %ld, fake launch(kernel_ptr = nothing_ptr), kernel_ptrs[%d] mod\n", program_addr, wrapper_ptr, *offset_ptr, *dim0_ptr);
 		// store PROGRAM_ADDRESS.
         kernel_ptrs[*dim0_ptr] = program_addr;
 

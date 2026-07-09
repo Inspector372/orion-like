@@ -14,9 +14,9 @@ CUfunction wrapper256_handle = NULL;
 __global__ void wrapper256(box256 arg, void* func, uint32_t lidx, uint32_t hidx) {
     // Index filtering.
     int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    if (workIndex == 3) {
+    /*if (workIndex == 3) {
         printf("sanity check, func = %p, lidx = %d, hidx = %d\n", func, lidx, hidx);
-    }
+    }*/
     if (workIndex < lidx || workIndex >= hidx) return;
 
     // theory: "move" the context to actual kernel.

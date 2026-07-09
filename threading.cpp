@@ -239,7 +239,7 @@ void run_wrapper(const void* target_kernel, void* target_kernel_program_addr,
 void* scheduler(void* scarg) {
 	int turn = 0;
 	int job_count = 0;
-	int total_job = THREAD_NUM * 5; // currently only 1 kernel is launched per thread.
+	int total_job = THREAD_NUM * 10000; // currently only 1 kernel is launched per thread.
 
 	pthread_mutex_lock(&start_mutex);
     pthread_mutex_unlock(&start_mutex);
@@ -251,8 +251,8 @@ void* scheduler(void* scarg) {
 			fprintf(stderr, "scheduler return - expected %d jobs completed\n", job_count);
 			return nullptr;
 		}
-		else if (time(NULL) - start_os > 60) {
-			fprintf(stderr, "scheduler return - total %d jobs completed, timeout of 60 second\n", job_count);
+		else if (time(NULL) - start_os > 25) {
+			fprintf(stderr, "scheduler return - total %d jobs completed, timeout of 25 seconds\n", job_count);
 			return nullptr;
 		}
 		// pop one from queue, and assign.
@@ -270,7 +270,7 @@ void* scheduler(void* scarg) {
 			// TODO: set kernel_ptrs[kptr_idx] = 0 after launching all atoms.
 			if(kernel_ptrs[kptr_idx] != 0) {
 				// TODO: how to pass status?
-				fprintf(stderr, "job %d running\n", turn);
+				// fprintf(stderr, "job %d running\n", turn);
 				// fprintf(stderr, "sched_streams[turn]: %p\n", *sched_streams[turn]);
 				run_wrapper(record.f, (void*)kernel_ptrs[kptr_idx],
 							record.gridDimX, record.gridDimY, record.gridDimZ,
@@ -279,7 +279,7 @@ void* scheduler(void* scarg) {
 							record.extra, record.lidx, record.hidx);
 
 				(*work_queue[turn]).pop();
-				fprintf(stderr, "scheduler finish job of #%d\n", turn);
+				// fprintf(stderr, "scheduler finish job of #%d\n", turn);
 				job_count++;
 			}
 
@@ -345,7 +345,8 @@ int main(int argc, char** argv) {
 			h_outs[i][j] = 0;
 		}
 		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
-		pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
+		// pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
+		pthread_create(&threads[i], NULL, softmaxKernel_wrap, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 
