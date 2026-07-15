@@ -31,8 +31,11 @@ struct global_sm_control {
 } __attribute__((packed));
 
 uint64_t wrapper_ptr;
+uint32_t wrapper_ptr_upper;
+uint32_t wrapper_ptr_lower;
 uint32_t nothing_ptr_upper;
 uint32_t nothing_ptr_lower;
+
 uint64_t kernel_ptrs[1000];
 uint64_t buffer_ptrs[8];
 uint32_t offsets[1000];
@@ -513,6 +516,8 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	if (callback_mode == 0) {
 		// fetch this to wrapper ptr.
 		wrapper_ptr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
+		wrapper_ptr_upper = *upper_ptr;
+		wrapper_ptr_lower = *lower_ptr;
 		fprintf(stderr, "set wrapper_ptr: %lx\n", wrapper_ptr);
 	}
 	else if(callback_mode == 1) {
@@ -534,19 +539,8 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		*lower_ptr = nothing_ptr_lower;
 	}
     else if(callback_mode == 3) {
-        for(int i = 0; i < 8; i++) {
-            uint64_t buffer_inside = (*buffer_start);
-            fprintf(stderr, "%dth buffer,\n", i);
-            fprintf(stderr, "address lower: %lx\n", (buffer_inside & 0xffffffff));
-            fprintf(stderr, "address upper: %lx\n", (buffer_inside & 0x1ffff00000000) >> 32);
-            buffer_ptrs[i] = (buffer_inside & 0x1ffffffffffff);
-            fprintf(stderr, "reserved_addr: %ld\n", (buffer_inside & 0x2000000000000) >> 49);
-            fprintf(stderr, "invali_addr: %ld\n", (buffer_inside & 0x4000000000000) >> 50);
-            fprintf(stderr, "size: %ld\n", (buffer_inside) >> 51);
-
-            buffer_start += 1;
-        }
-        
+        *upper_ptr = wrapper_ptr_upper;
+		*lower_ptr = wrapper_ptr_lower;
         
     }
 }

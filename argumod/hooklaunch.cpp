@@ -10,6 +10,7 @@
 // Real function pointers
 static cudaError_t (*real_cudaLaunchKernel)(const void*, dim3, dim3, void**, size_t, cudaStream_t) = NULL;
 static CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
+static CUresult (*real_cuFuncGetParamInfo)(CUfunction, size_t, size_t*, size_t*) = NULL;
 
 typedef CUresult (*cuGetProcAddress_t)(const char*, void**, int, unsigned int, void*);
 static cuGetProcAddress_t real_cuGetProcAddress = NULL;
@@ -32,8 +33,47 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
             fprintf(stderr, "FATAL ERROR: real_cuLaunchKernel == cuLaunchKernel\n");
         }
     }
+
+    if(real_cuFuncGetParamInfo == NULL) {
+        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+        real_cuFuncGetParamInfo = (CUresult (*)(CUfunction, size_t, size_t*, size_t*))real_dlsym(cu_handle, "cuFuncGetParamInfo");
+    }
     fprintf(stderr, "[HOOK] Target Intercepted! cuLaunchKernel executed.\n");
-    return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
+
+    char argBuffer[256];
+
+    size_t func_param_count = 0;
+    size_t last_param_offset = 0;
+    size_t func_param_offset;
+    size_t last_param_size = 0;
+	size_t func_param_size;
+	CUresult param_err;
+    // fprintf(stderr, "paraminfo, argsetup start\n");
+    while ((param_err = real_cuFuncGetParamInfo((CUfunction)f, func_param_count, &func_param_offset, &func_param_size)) == CUDA_SUCCESS) {
+        fprintf(stderr, "memcpy %ld, size = %ld, offset = %ld\n", func_param_count, func_param_size, func_param_offset);
+        memcpy(&(argBuffer[func_param_offset]), kernelParams[func_param_count], func_param_size);
+        last_param_offset = func_param_offset;
+        last_param_size = func_param_size;
+        func_param_count++;
+    }
+
+    size_t argBufferSize = last_param_offset + last_param_size;
+    fprintf(stderr, "argBufferSize: %d\n", argBufferSize);
+    uint64_t magic = 0xdeadbeefdeadbeef;
+    memcpy(&(argBuffer[argBufferSize]), &magic, 8);
+    argBufferSize += 8;
+
+    void *config[] = {
+        CU_LAUNCH_PARAM_BUFFER_POINTER,
+        argBuffer,
+        CU_LAUNCH_PARAM_BUFFER_SIZE,
+        &argBufferSize,
+        CU_LAUNCH_PARAM_END
+    };
+
+    
+
+    return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, NULL, config);
 }
 
 CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {

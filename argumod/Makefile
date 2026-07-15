@@ -7,17 +7,17 @@ libsmctrl.a:
 hooklaunch.so:
 	g++ -fPIC hooklaunch.cpp -o hooklaunch.so -shared -ldl
 
-test_argumod.cu: 
-	nvcc -g -G test_argumod.cu -o test_argumod libsmctrl.a -ldl -lcudart -lcuda -L/usr/local/cuda-12.8/lib64/stubs
+test_hook: 
+	nvcc -g -G test_hook.cu -o test_hook libsmctrl.a -ldl -lcudart -lcuda -L/usr/local/cuda-12.8/lib64/stubs
 
 all:
 	make libsmctrl.o
 	make libsmctrl.a
 	make hooklaunch.so
-	make test_argumod.cu
+	make test_hook
 
 clean:
 	rm libsmctrl.o
 	rm libsmctrl.a
 	rm hooklaunch.so
-	rm test_argumod
+	rm test_hook
