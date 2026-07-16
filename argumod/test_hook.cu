@@ -28,11 +28,11 @@ __global__ void mul(double* res, double* op1, double* op2, uint64_t length) {
     return;
 }
 
-__global__ void wrapper(bigbox args) {
-    int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    if(workIndex == 0) {
+__global__ void wrapper() {
+    // int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    /*if(workIndex == 0) {
         printf("args magic: %lx\n", *((uint64_t*)&(args.data[24])));
-    }
+    }*/
     return;
 }
 
@@ -42,8 +42,13 @@ int main() {
     libsmctrl_false_launch_callback();
     callback_mode = 0;
     bigbox box;
-    wrapper<<<1, 1>>>(box);
+    wrapper<<<1, 1>>>();
     cudaDeviceSynchronize();
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA Error: " << cudaGetErrorString(err) << std::endl;
+    }
 
     callback_mode = 3;
 
@@ -82,10 +87,9 @@ int main() {
     cudaDeviceSynchronize();
 
     // Check for kernel launch errors
-    cudaError_t err = cudaGetLastError();
+    err = cudaGetLastError();
     if (err != cudaSuccess) {
         std::cerr << "CUDA Error: " << cudaGetErrorString(err) << std::endl;
-        return -1;
     }
 
     // 8. Copy Result Back to Host
