@@ -539,9 +539,15 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		*lower_ptr = nothing_ptr_lower;
 	}
     else if(callback_mode == 3) {
-        *upper_ptr = wrapper_ptr_upper;
-		*lower_ptr = wrapper_ptr_lower;
-        
+        for(int i = 0; i < 8; i++) {
+			buffer_ptrs[i] = (*buffer_start) & 0x0001ffffffffffff;
+			buffer_start += 1;
+		}
+		uint64_t* base_ptr = (uint64_t*)(**((char***)in_params + 8) + 0);
+		fprintf(stderr, "printing everything in QMD\n");
+		for(int i = 0; i < 32; i++) {
+			 fprintf(stderr, "offset %d content %lx, \n", i * 64, *(base_ptr + i));
+		}
     }
 	else if(callback_mode == 4) {
 		uint64_t* base_ptr = (uint64_t*)(**((char***)in_params + 8) + 0);
