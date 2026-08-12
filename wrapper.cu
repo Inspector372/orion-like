@@ -9,7 +9,6 @@
 #include <cuda_runtime.h>
 #include "wrapper.h"
 
-CUfunction wrapper256_handle = NULL;
 
 __global__ void wrapper(const __grid_constant__ uint32_t argu) {
     AtomMetaData* metadata = atomMetaDataTable.find(&argu);

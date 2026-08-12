@@ -161,53 +161,6 @@ void assign_launch() {
 	*no_hook_thr = false;
 }
 
-/*
-    invoke paraminfo_func to target_kernel, to get information about **args.
-    read arguments, put in wrapper box in arranged manner.
-    then invoke kernel_func, with wrapper as its func arguments,
-    and further arguments filled with following arguments.
-
-    TODO: support multiple box size.
-    TODO: move this to threading.cpp.
-*/
-void run_wrapper(const void* target_kernel, void* target_kernel_program_addr,
-	unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
-    unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
-    unsigned int sharedMemBytes, CUstream hStream, void** kernelParams,
-	void** extra, size_t lidx, size_t hidx)
-{
-    box256 argbox;
-    size_t func_param_count = 0;
-    size_t func_param_offset;
-	size_t func_param_size;
-	CUresult param_err;
-    // fprintf(stderr, "paraminfo, argsetup start\n");
-    while ((param_err = (*actual_cuFuncGetParamInfo)((CUfunction)target_kernel, func_param_count, &func_param_offset, &func_param_size)) == CUDA_SUCCESS) {
-        // fprintf(stderr, "memcpy %ld, size = %ld, offset = %ld\n", func_param_count, func_param_size, func_param_offset);
-        memcpy(&(argbox.data[func_param_offset]), kernelParams[func_param_count], func_param_size);
-        func_param_count++;
-    }
-    // fprintf(stderr, "paraminfo, argsetup done\n");
-
-    void* func = target_kernel_program_addr;
-    uint32_t lidx_arg = lidx;
-    uint32_t hidx_arg = hidx;
-
-    void* kernel_args[] = {
-        &argbox,
-        &func,
-        &lidx_arg,
-        &hidx_arg
-    };
-
-	if(wrapper256_handle == NULL) {
-		cudaFunction_t handle_ptr;
-		cudaGetFuncBySymbol(&handle_ptr, (const void*)wrapper256);
-		wrapper256_handle = (CUfunction)handle_ptr;
-	}
-
-    (*actual_cuLaunchKernel)(wrapper256_handle, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernel_args, extra);
-}
 
 
 /*
@@ -245,21 +198,16 @@ void* scheduler(void* scarg) {
 			record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
 
 			size_t kptr_idx = record.kptr_index;
-			// TODO: set kernel_ptrs[kptr_idx] = 0 after launching all atoms.
-			if(kernel_ptrs[kptr_idx] != 0) {
-				// TODO: how to pass status?
-				// fprintf(stderr, "job %d running\n", turn);
-				// fprintf(stderr, "sched_streams[turn]: %p\n", *sched_streams[turn]);
-				run_wrapper(record.f, (void*)kernel_ptrs[kptr_idx],
-							record.gridDimX, record.gridDimY, record.gridDimZ,
-							record.blockDimX, record.blockDimY, record.blockDimZ,
-							record.sharedMemBytes, (CUstream)*sched_streams[turn], record.kernelParams,
-							record.extra, record.lidx, record.hidx);
 
-				(*work_queue[turn]).pop();
-				// fprintf(stderr, "scheduler finish job of #%d\n", turn);
-				job_count++;
-			}
+			// TODO: how to pass status?
+			// fprintf(stderr, "job %d running\n", turn);
+			// fprintf(stderr, "sched_streams[turn]: %p\n", *sched_streams[turn]);
+
+    		(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernel_args, record.extra);
+
+			(*work_queue[turn]).pop();
+			// fprintf(stderr, "scheduler finish job of #%d\n", turn);
+			job_count++;
 
 		}
 		pthread_mutex_unlock(work_queue_mutex[turn]);

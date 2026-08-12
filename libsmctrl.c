@@ -531,12 +531,17 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	}
 	else if(callback_mode == 2) {
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
+		uint64_t buffer_addr = (*buffer_start) & 0x0001ffffffffffff;
+		uint32_t index = *griddimx_ptr;
 
-		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, etc: %ld, fake launch(kernel_ptr = nothing_ptr), kernel_ptrs[%d] mod\n", program_addr, wrapper_ptr, *offset_ptr, *dim0_ptr);
-		// store PROGRAM_ADDRESS.
-        kernel_ptrs[*dim0_ptr] = program_addr;
+		uint32_t lidx = launchMetaData[index].atom_size * (*blockdimx_ptr);
+		uint32_t hidx = launchMetaData[index].atom_size * (*blockdimx_ptr + 1);
+		
+		// TODO: put (buffer_addr + 0x160) => (program_addr, lidx, hidx) in hash table.
 
-		// modify something so that we hit error...?
+		*griddimx_ptr = launchMetaData[index].original_grid_dim;
+		*blockdimx_ptr = launchMetaData[index].original_block_dim;
+		
 		*upper_ptr = wrapper_ptr_upper;
 		*lower_ptr = wrapper_ptr_lower;
 	}
