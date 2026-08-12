@@ -74,24 +74,24 @@ extern void libsmctrl_false_launch_callback();
 
 /*
     Communication between cuLaunchKernel() and QMD.
-    when cuLaunchKernel() is called with original thread dimension N1,
+    when cuLaunchKernel() is called with original grid dimension N, block dimension M.
     we atomically increase kernel_ptrs_index(name is not changed yet)
-    to get original index for this kernel launch, N2.
-
-    then we set AtomMetaData[N2] = {N1, 0, (# of workIndex we are atomizing, called 'step')}
-    then calling cuLaunchKernel(blockDim.x = N2) will result QMD holding N2 in CTA_THREAD_DIMENSION_0.
-
+    to get original index for this kernel launch, N', and get number of items M' by atomization.
+    N is indicator of specific kernel launch, and M is atom index.
+    then we set launchMetaData[N'] = {N, M, atom size}
+    then calling cuLaunchKernel(gridDim.x = N', blockDim.x = M')
+    will result QMD holding N' in CTA_THREAD_DIMENSION_0
+    and holding M' in CTA_RASTER_WIDTH.
 */
-typedef struct AtomMetaData_t {
-    uint32_t original_thread_dim;
-    uint32_t atom_idx;
-    uint32_t step;  
-}AtomMetaData_t;
+typedef struct LaunchMetaData_t {
+    uint32_t original_grid_dim;
+    uint32_t original_block_dim;
+    uint32_t atom_size;
+}LaunchMetaData_t;
 
 #define MAX_ATOMMETADATA 1000;
 
-extern AtomMetaData_t AtomMetaData[MAX_ATOMMETADATA];
-extern uint64_t wrapper_ptr;
+extern LaunchMetaData_t launchMetaData[MAX_ATOMMETADATA];
 extern uint32_t callback_mode;
 
 #ifdef __cplusplus

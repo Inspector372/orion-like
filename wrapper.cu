@@ -1,10 +1,8 @@
 /*
     wrapper.cu
-    
-    defines wrapper and idle kernels.
-    currently there is only wrapper256(), but size of box need to vary(to reduce overhead...?),
-    so multiple box size need to be supported later.
-    current kernel will raise error if total size of parameter is bigger than 256 bytes.
+
+    Defines wrapper.
+
 */ 
 #include <stdio.h>
 #include <cuda.h>
@@ -13,16 +11,16 @@
 
 CUfunction wrapper256_handle = NULL;
 
-__global__ void wrapper256(box256 arg, void* func, uint32_t lidx, uint32_t hidx) {
-    // Index filtering.
+__global__ void wrapper(const __grid_constant__ uint32_t argu) {
+    AtomMetaData* metadata = atomMetaDataTable.find(&argu);
+    void* kernel = metadata->kernel;
+    uint32_t lidx = metadata->lidx;
+    uint32_t hidx = metadata->hidx;
+
     int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    /*if (workIndex == 3) {
-        printf("sanity check, func = %p, lidx = %d, hidx = %d\n", func, lidx, hidx);
-    }*/
     if (workIndex < lidx || workIndex >= hidx) return;
 
-    // theory: "move" the context to actual kernel.
-    ((func_ptr_t)func)();
+    ((func_ptr_t)kernel)();
 }
 
 __global__ void do_nothing() {

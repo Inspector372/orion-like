@@ -3,9 +3,6 @@
 	How to run: env CUDA_VISIBLE_DEVICES=0 LD_PRELOAD=./hooking.so ./threading
 */
 
-
-
-
 #include <dlfcn.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -22,7 +19,6 @@
 #include "hooking.h"
 
 #define THREAD_NUM 4
-#define MAX_KERNEL_PTRS 256
 
 using namespace std;
 
@@ -35,6 +31,7 @@ queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 cudaStream_t fl_stream;
 
+LaunchMetaData_hooking_t* launchMetaData_hooking;
 
 CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
 
@@ -137,12 +134,16 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	// TODO: stall here if kernel_ptrs[] is full, waiting previous jobs to be ended.
 	pthread_mutex_lock(&kernel_ptrs_mutex);
 	int kptr_idx = kernel_ptrs_index;
-	kernel_ptrs_index = (kernel_ptrs_index + 1) % MAX_KERNEL_PTRS;
+	kernel_ptrs_index = (kernel_ptrs_index + 1) % MAX_ATOMMETADATA;
 	if(kernel_ptrs_index == 0) kernel_ptrs_index = 1;
 	pthread_mutex_unlock(&kernel_ptrs_mutex);
 
-	// Fake launch.
-	real_cuLaunchKernel(f, 1, 1, 1, kptr_idx, 1, 1, sharedMemBytes, (CUstream)fl_stream, kernelParams, extra);
+	launchMetaData_hooking[kernel_ptrs_index].original_grid_dim = gridDimX;
+	launchMetaData_hooking[kernel_ptrs_index].original_block_dim = blockDimX;
+	launchMetaData_hooking[kernel_ptrs_index].atom_size = atom_size;
+
+	// (Fake launch)
+	// real_cuLaunchKernel(f, 1, 1, 1, kptr_idx, 1, 1, sharedMemBytes, (CUstream)fl_stream, kernelParams, extra);
 
 	CUresult err = CUDA_SUCCESS;
 	record_cuLaunchKernel new_record;
@@ -150,8 +151,9 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	assert(work_queue_mutex != NULL);
 	assert(work_queue != NULL);
 
-	// queue multiple kernels of same instance
-	new_record = {f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra, kptr_idx, 0, atom_size};
+	// queue multiple kernels of same instance, with gridDimX = kernel_ptrs_index
+	// need synchronization at libsmctrl
+	new_record = {f, kernel_ptrs_index, gridDimY, gridDimZ, 1, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra, kptr_idx, 0, atom_size};
 	union record_data new_record_data;
 	new_record_data.r_cuLaunchKernel = new_record;
 	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
@@ -161,8 +163,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	// Atomization.
 	for(int i=0; i<atom_num; i++) {
 		work_queue[idx]->push(new_qrecord);
-		new_qrecord.data.r_cuLaunchKernel.lidx += atom_size;
-		new_qrecord.data.r_cuLaunchKernel.hidx += atom_size;
+		new_qrecord.data.r_cuLaunchKernel.blockDimX += 1;
 	}
 	
 

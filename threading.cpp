@@ -106,6 +106,10 @@ void variables_setup() {
 	// 4. no-hook switch.
 	no_hook_thr = (bool*)dlsym(klib, "no_hook");
 
+	// 5. launch metadata address sharing to hooking.cpp
+	(LaunchMetaData_hooking_t**) launchMeta = (LaunchMetaData_hooking_t**)dlsym(klib, "launchMetaData_hooking");
+	*launchMeta = launchMetaData;
+
 	// for now, those are just all. now we can use those variables in hooking.cpp.
 }
 

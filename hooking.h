@@ -33,3 +33,9 @@ typedef struct queue_record {
 	enum record_type type;
 	union record_data data;
 } queue_record;
+
+typedef struct LaunchMetaData_hooking_t {
+    uint32_t original_grid_dim;
+    uint32_t original_block_dim;
+    uint32_t atom_size; 
+}LaunchMetaData_hooking_t;

@@ -1,10 +1,12 @@
 typedef struct{
-    unsigned char data[256];  
-} box256;
+    void* kernel; 
+    uint32_t lidx;
+    uint32_t hidx; 
+} AtomMetaData;
 
 typedef void (*func_ptr_t)();
 
-__global__ void wrapper256(box256 arg, void* func, uint32_t lidx, uint32_t hidx);
+__global__ void wrapper(const __grid_constant__ uint32_t argu);
 
 extern CUfunction wrapper256_handle;
 

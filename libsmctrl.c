@@ -30,12 +30,15 @@ struct global_sm_control {
 	uint64_t mask;
 } __attribute__((packed));
 
-uint64_t wrapper_ptr;
 uint32_t nothing_ptr_upper;
 uint32_t nothing_ptr_lower;
-uint64_t kernel_ptrs[1000];
-uint32_t offsets[1000];
+uint32_t wrapper_ptr_upper;
+uint32_t wrapper_ptr_lower;
+LaunchMetaData_t launchMetaData[MAX_ATOMMETADATA]
 uint32_t callback_mode = 0;
+
+uint32_t offsets[1000];
+
 // /*** CUDA Globals Manipulation. CUDA 10.2 only ***/
 
 // // Ends up being 0x7fb7fa3408 in some binaries (CUDA 10.2, Jetson)
@@ -491,12 +494,13 @@ abort_cuda:
     consider any kernel call as idle kernel call, then store PROGRAM_ADDRESS at nothing_ptr_upper and lower.
 
     if callback_mode == 2, it's normal kernel launch mode.
-	1. every kernel call's PROGRAM_ADDRESS and CTA_THREAD_DIMENSION_0 is catched.
-	2. look at AtomMetaData[CTA_THREAD_DIMENSION_0], calculate lidx and hidx, and fetch PROGRAM_ADDRESS.
+	1. every kernel call's PROGRAM_ADDRESS, CONSTANT_BUFFER_ADDR, CTA_RASTER_WIDTH, CTA_THREAD_DIMENSION_0 is catched.
+	2. look at launchMetaData[CTA_RASTER_WIDTH], calculate lidx and hidx.
 	3. Then we put this entry in gpu's hash table:
 		HT[CONSTANT_BUFFER_ADDR + 0x160] = (lidx, hidx, PROGRAM_ADDRESS)
-	4. CTA_THREAD_DIMENSION_0 is replaced to AtomMetaData[CTA_THREAD_DIMENSION_0].original_thread_dim.
-	5. PROGRAM_ADDRESS is replaced to wrapper's program address.
+	4. CTA_RASTER_WIDTH is replaced to launchMetaData[CTA_RASTER_WIDTH].original_grid_dim.
+	5. CTA_THREAD_DIMENSION_0 is replaced to launchMetaData[CTA_RASTER_WIDTH].original_block_dim.
+	6. PROGRAM_ADDRESS is replaced to wrapper's program address.
 */
 static void false_launch_callback(void *ukwn, int domain, int cbid, const void *in_params) {
 	if (*(uint32_t*)in_params < 0x50) {
@@ -510,11 +514,14 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 
 	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
 	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
-	uint16_t *dim0_ptr = (uint16_t*)(**((char***)in_params + 8) + 74);
-	uint8_t *offset_ptr = (uint32_t*)(**((char***)in_params + 8) + 81);
+	uint32_t *griddimx_ptr = (uint32_t*)(**((char***)in_params + 8) + 48);
+	uint16_t *blockdimx_ptr = (uint16_t*)(**((char***)in_params + 8) + 74);
+	uint64_t *buffer_start = (uint16_t*)(**((char***)in_params + 8) + 128);
+	// (*buffer_start) & 0x0001ffffffffffff is actual constant buffer address
 	if (callback_mode == 0) {
 		// fetch this to wrapper ptr.
-		wrapper_ptr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
+		wrapper_ptr_upper = *upper_ptr;
+		wrapper_ptr_lower = *lower_ptr;
 		fprintf(stderr, "set wrapper_ptr: %lx\n", wrapper_ptr);
 	}
 	else if(callback_mode == 1) {
@@ -524,18 +531,14 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	}
 	else if(callback_mode == 2) {
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
-		if(program_addr == wrapper_ptr) {
-			// fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, etc: %ld, real launch return\n", program_addr, wrapper_ptr, *offset_ptr);
-			// *offset_ptr = 64;
-			return;
-		}
+
 		fprintf(stderr, "program_addr: %lx, wrapper_ptr: %lx, etc: %ld, fake launch(kernel_ptr = nothing_ptr), kernel_ptrs[%d] mod\n", program_addr, wrapper_ptr, *offset_ptr, *dim0_ptr);
 		// store PROGRAM_ADDRESS.
         kernel_ptrs[*dim0_ptr] = program_addr;
 
 		// modify something so that we hit error...?
-		*upper_ptr = nothing_ptr_upper;
-		*lower_ptr = nothing_ptr_lower;
+		*upper_ptr = wrapper_ptr_upper;
+		*lower_ptr = wrapper_ptr_lower;
 	}
 }
 
