@@ -1,4 +1,6 @@
 /*
+    wrapper.cu
+    
     defines wrapper and idle kernels.
     currently there is only wrapper256(), but size of box need to vary(to reduce overhead...?),
     so multiple box size need to be supported later.

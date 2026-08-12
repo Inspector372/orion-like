@@ -72,7 +72,25 @@ extern int libsmctrl_get_tpc_info_cuda(uint32_t* num_tpcs, int cuda_dev);
 
 extern void libsmctrl_false_launch_callback();
 
-extern uint64_t kernel_ptrs[1000];
+/*
+    Communication between cuLaunchKernel() and QMD.
+    when cuLaunchKernel() is called with original thread dimension N1,
+    we atomically increase kernel_ptrs_index(name is not changed yet)
+    to get original index for this kernel launch, N2.
+
+    then we set AtomMetaData[N2] = {N1, 0, (# of workIndex we are atomizing, called 'step')}
+    then calling cuLaunchKernel(blockDim.x = N2) will result QMD holding N2 in CTA_THREAD_DIMENSION_0.
+
+*/
+typedef struct AtomMetaData_t {
+    uint32_t original_thread_dim;
+    uint32_t atom_idx;
+    uint32_t step;  
+}AtomMetaData_t;
+
+#define MAX_ATOMMETADATA 1000;
+
+extern AtomMetaData_t AtomMetaData[MAX_ATOMMETADATA];
 extern uint64_t wrapper_ptr;
 extern uint32_t callback_mode;
 

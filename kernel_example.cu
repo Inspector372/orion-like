@@ -1,5 +1,7 @@
-
-// Example kernels.
+/*
+    kernel_example.cu
+    
+*/
 
 #define CUDA_CHECK(expr)                                                        \
     do {                                                                        \

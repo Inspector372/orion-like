@@ -1,32 +1,6 @@
-
-// Threading logics prototype.
-// Current goal: make queue for each thread, and schedule them in round-robin fashion.
-// 1. register real cuda functions to global pointers.
-// 2. create N threads that runs kernels 3 times, and make queue for each thread.
-// 3. create 1 scheduler() thread that can see all queues from threads.
-// 4. let the scheduler round-robin jobs from threads.
-
 /*
-# Compile the .cu file into an object file
-nvcc -c cuda_functions.cu -o cuda_functions.o
+	threading.cpp
 
-# Compile the .cpp file (using g++)
-g++ -c main.cpp -o main.o
-
-# Link the object files and the CUDA runtime library
-g++ main.o cuda_functions.o -L/usr/local/cuda/lib64 -lcudart -o my_program
-# (Adjust the -L path based on your CUDA Toolkit installation location)
-*/
-
-/*
-문제:
-1. hooking.cpp는 따로 컴파일되고, 이를 LD_PRELOAD로 불러와서 threading이 cudalib을 'link하기 전' 미리 linking하는 것
-그러면, hooking.cpp가 원하는 것은 cudalib이 어디에 있던 간에, link되기 전에 해당 함수들을 미리 hook해두는 것
-	-> cudaFuncGetName같은 함수는 hooking.cpp에서 사용 불가능???
-threading에서는 접근 가능, 여기에서 손을 봐야하나?
-
-2. threading이 정확히 뭘 하는 program?
-프로그램들 [job1, job2, ..., jobN]을 불러와서 '실행' 하는 것으로 봐도 되나?
 
 */
 

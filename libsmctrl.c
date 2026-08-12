@@ -487,13 +487,16 @@ abort_cuda:
 	if callback_mode == 0, it's wrapper assign mode.
 	consider any kernel call as wrapper call, then store PROGRAM_ADDRESS at wrapper_ptr.
 
-	if callback_mode == 1, it's idle kernel assign mode.
+	if callback_mode == 1, it's idle kernel assign mode. (Obsolete)
     consider any kernel call as idle kernel call, then store PROGRAM_ADDRESS at nothing_ptr_upper and lower.
 
     if callback_mode == 2, it's normal kernel launch mode.
-    every non-wrapper call is snapped and PROGRAM_ADDRESS is replaced with idle kernel which does nothing.
-    and its own PROGRAM_ADDRESS is stored at kernel_ptrs[t] where t is blockDim.x,
-    which is extracted from CTA_THREAD_DIMENSION_0 field.
+	1. every kernel call's PROGRAM_ADDRESS and CTA_THREAD_DIMENSION_0 is catched.
+	2. look at AtomMetaData[CTA_THREAD_DIMENSION_0], calculate lidx and hidx, and fetch PROGRAM_ADDRESS.
+	3. Then we put this entry in gpu's hash table:
+		HT[CONSTANT_BUFFER_ADDR + 0x160] = (lidx, hidx, PROGRAM_ADDRESS)
+	4. CTA_THREAD_DIMENSION_0 is replaced to AtomMetaData[CTA_THREAD_DIMENSION_0].original_thread_dim.
+	5. PROGRAM_ADDRESS is replaced to wrapper's program address.
 */
 static void false_launch_callback(void *ukwn, int domain, int cbid, const void *in_params) {
 	if (*(uint32_t*)in_params < 0x50) {

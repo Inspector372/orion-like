@@ -1,61 +1,10 @@
-
-// Hooking library - hooks CUDA calls
-// Hooking logics are mostly directly imported from Orion.
-// env CUDA_VISIBLE_DEVICES=0 LD_PRELOAD=./hooking.so ./threading
-// ..
-
-/* 
-	goal
-		1. fake launch configuration
-		2. atomization by 1024 (for now fixed number, but will be changed later .. )
-
-	main problems
-		1. where do I put fake launch?
-			- looks like work_queue need to be filled with 'real' launches.
-			- separate 'highest priority' stream need to be there.
-			- submit 'directly' to highest stream at hooker-level, with blockDim.x = K.
-			- append that number K to queue.
-
-		2. clean way to 'actually' link launch
-			- TODO
-
-		3. So what should be in queue??
-			- cudaLaunchKernel() args (except stream)
-			- actual stream to be scheduled, or some hint to this...?
-				(for now no need to care)
-			- lidx, hidx
-
-		4. when to construct arguments in wrapper()?
-			- arg -> at scheduler.
-			- func -> (just pass)
-			- lidx, hidx -> need to be calculated at hooker and send to scheduler.
-
-
-	Total capture logic
-	1. cudaLaunchKernel() capture
-	2. submit func and attribute to per-client work_queue[]
-	3. (block until scheduler fetches) -> for other 'blocking' cuda calls!!
-		need to modify !!!
-	4. scheduler fetches work_queue, and launch (func, attribute) in the queue.
-
-	Modified logic
-	1. cudaLaunchKernel() capture
-	+. calculate gridDim * blockDim / (NUM_PARTITION)
-	+. calculate (lidx, hidx) ranges
-	+. 'directly launch' original kernel using highest stream, with blockDim.x=K(fake-launch).
-	2. submit func and attribute to per-client work_queue[]
-	+. submit lidx, hidx, K too.
-	3. (block until scheduler fetches) -> for other 'blocking' cuda calls!!
-		need to modify !!!
-	4. scheduler fetches work_queue (func, attribute, K, lidx, hidx)
-	+. checks if kernel_ptrs[K] contains address (if fake launch has finished)
-		- policy design -> if not, fetch others? or stall?
-	+. fetch kernel_ptrs[K]
-	+. construct parameter pack 'arg' from original arguments.
-	+. cudaLaunchKernel EQUIVALENT TO wrapper<<<gridDim, blockDim, sharedMem, dedicated_stream>>>(arg, func, lidx, hidx)
-		- we shouldn't call this because wrapper is getting hooked!!
-
+/*
+	hooking.cpp
+	How to run: env CUDA_VISIBLE_DEVICES=0 LD_PRELOAD=./hooking.so ./threading
 */
+
+
+
 
 #include <dlfcn.h>
 #include <stdio.h>
