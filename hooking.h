@@ -16,10 +16,6 @@ typedef struct record_cuLaunchKernel {
 	CUstream hStream;
 	void** kernelParams;
 	void** extra;
-
-	size_t kptr_index;
-	size_t lidx;
-	size_t hidx;
 } record_cuLaunchKernel;
 
 union record_data {

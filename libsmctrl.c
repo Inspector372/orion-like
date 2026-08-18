@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
+#include "wrapper.h"
 
 // In functions that do not return an error code, we favor terminating with an
 // error rather than merely printing a warning and continuing.
@@ -38,6 +39,8 @@ LaunchMetaData_t launchMetaData[MAX_ATOMMETADATA]
 uint32_t callback_mode = 0;
 
 uint32_t offsets[1000];
+
+extern cuco::static_map<uint64_t, AtomMetaData>* atomMetaDataTable;
 
 // /*** CUDA Globals Manipulation. CUDA 10.2 only ***/
 
@@ -538,6 +541,11 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		uint32_t hidx = launchMetaData[index].atom_size * (*blockdimx_ptr + 1);
 		
 		// TODO: put (buffer_addr + 0x160) => (program_addr, lidx, hidx) in hash table.
+		AtomMetaData metadata;
+		metadata.kernel = program_addr;
+		metadata.lidx = lidx;
+		metadata.hidx = hidx;
+		atomMetaDataTable->insert(buffer_addr + 0x160, metadata);
 
 		*griddimx_ptr = launchMetaData[index].original_grid_dim;
 		*blockdimx_ptr = launchMetaData[index].original_block_dim;

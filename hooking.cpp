@@ -138,9 +138,9 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	if(kernel_ptrs_index == 0) kernel_ptrs_index = 1;
 	pthread_mutex_unlock(&kernel_ptrs_mutex);
 
-	launchMetaData_hooking[kernel_ptrs_index].original_grid_dim = gridDimX;
-	launchMetaData_hooking[kernel_ptrs_index].original_block_dim = blockDimX;
-	launchMetaData_hooking[kernel_ptrs_index].atom_size = atom_size;
+	launchMetaData_hooking[kptr_idx].original_grid_dim = gridDimX;
+	launchMetaData_hooking[kptr_idx].original_block_dim = blockDimX;
+	launchMetaData_hooking[kptr_idx].atom_size = atom_size;
 
 	// (Fake launch)
 	// real_cuLaunchKernel(f, 1, 1, 1, kptr_idx, 1, 1, sharedMemBytes, (CUstream)fl_stream, kernelParams, extra);
@@ -153,7 +153,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 
 	// queue multiple kernels of same instance, with gridDimX = kernel_ptrs_index
 	// need synchronization at libsmctrl
-	new_record = {f, kernel_ptrs_index, gridDimY, gridDimZ, 1, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra, kptr_idx, 0, atom_size};
+	new_record = {f, kptr_idx, gridDimY, gridDimZ, 1, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra};
 	union record_data new_record_data;
 	new_record_data.r_cuLaunchKernel = new_record;
 	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};

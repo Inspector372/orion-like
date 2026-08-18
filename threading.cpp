@@ -1,7 +1,6 @@
 /*
 	threading.cpp
 
-
 */
 
 #include <stdio.h>
@@ -61,10 +60,13 @@ cudaStream_t* fake_launch_stream;
 
 time_t start_os;
 
-
 typedef struct scheduler_arg {
 	int PLACEHOLDER;
 } scheduler_arg;
+
+cuco::static_map<uint64_t, AtomMetaData>* atomMetaDataTable;
+
+
 
 /* imported from Orion, RTLD_DEFAULT -> handle */
 void register_functions() {
@@ -109,6 +111,13 @@ void variables_setup() {
 	// 5. launch metadata address sharing to hooking.cpp
 	(LaunchMetaData_hooking_t**) launchMeta = (LaunchMetaData_hooking_t**)dlsym(klib, "launchMetaData_hooking");
 	*launchMeta = launchMetaData;
+
+	// 6. crate static map used for atommetadata.
+	atomMetaDataTable = new cuco::static_map<uint64_t, AtomMetaData>{
+        4096,
+        cuco::empty_key{-1},
+        cuco::empty_value{{-1, -1, -1}}
+    };
 
 	// for now, those are just all. now we can use those variables in hooking.cpp.
 }
@@ -196,8 +205,6 @@ void* scheduler(void* scarg) {
 			// currently all types are r_cuLaunchKernel.
 			queue_record qrecord = (*work_queue[turn]).front();
 			record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
-
-			size_t kptr_idx = record.kptr_index;
 
 			// TODO: how to pass status?
 			// fprintf(stderr, "job %d running\n", turn);
