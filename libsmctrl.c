@@ -9,6 +9,7 @@
   !!!! THIS IS MODIFIED VERSION !!!!
   Need to erase some non-used original code, but let's do that later.
 */
+#define MAX_ATOMMETADATA 1000
 
 #include <cuda.h>
 
@@ -18,7 +19,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
-#include "wrapper.h"
 
 // In functions that do not return an error code, we favor terminating with an
 // error rather than merely printing a warning and continuing.
@@ -31,16 +31,34 @@ struct global_sm_control {
 	uint64_t mask;
 } __attribute__((packed));
 
+typedef struct LaunchMetaData_t {
+    uint32_t original_grid_dim;
+    uint32_t original_block_dim;
+    uint32_t atom_size;
+} LaunchMetaData_t;
+
+typedef struct AtomMetaData_t{
+	uint64_t key;
+    uint64_t kernel; 
+    uint32_t lidx;
+    uint32_t hidx; 
+} AtomMetaData_t;
+
+
 uint32_t nothing_ptr_upper;
 uint32_t nothing_ptr_lower;
 uint32_t wrapper_ptr_upper;
 uint32_t wrapper_ptr_lower;
-LaunchMetaData_t launchMetaData[MAX_ATOMMETADATA]
+LaunchMetaData_t launchMetaData[MAX_ATOMMETADATA];
 uint32_t callback_mode = 0;
 
 uint32_t offsets[1000];
 
-extern cuco::static_map<uint64_t, AtomMetaData>* atomMetaDataTable;
+static void (*hash_insert_callback)(uint64_t, AtomMetaData_t) = NULL;
+
+void assign_hash_insert(void* addr) {
+	hash_insert_callback = (void (*)(uint64_t, LaunchMetaData_t))addr;
+}
 
 // /*** CUDA Globals Manipulation. CUDA 10.2 only ***/
 
@@ -525,12 +543,10 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		// fetch this to wrapper ptr.
 		wrapper_ptr_upper = *upper_ptr;
 		wrapper_ptr_lower = *lower_ptr;
-		fprintf(stderr, "set wrapper_ptr: %lx\n", wrapper_ptr);
 	}
 	else if(callback_mode == 1) {
 		nothing_ptr_upper = *upper_ptr;
 		nothing_ptr_lower = *lower_ptr;
-		fprintf(stderr, "set nothing_ptr: %lx\n", ((uint64_t)(nothing_ptr_upper) << 32) + (uint64_t)(nothing_ptr_lower));
 	}
 	else if(callback_mode == 2) {
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
@@ -541,11 +557,12 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		uint32_t hidx = launchMetaData[index].atom_size * (*blockdimx_ptr + 1);
 		
 		// TODO: put (buffer_addr + 0x160) => (program_addr, lidx, hidx) in hash table.
-		AtomMetaData metadata;
+		AtomMetaData_t metadata;
+		metadata.key = buffer_addr + 0x160;
 		metadata.kernel = program_addr;
 		metadata.lidx = lidx;
 		metadata.hidx = hidx;
-		atomMetaDataTable->insert(buffer_addr + 0x160, metadata);
+		hash_insert_callback(buffer_addr + 0x160, metadata);
 
 		*griddimx_ptr = launchMetaData[index].original_grid_dim;
 		*blockdimx_ptr = launchMetaData[index].original_block_dim;

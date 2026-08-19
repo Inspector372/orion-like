@@ -72,6 +72,8 @@ extern int libsmctrl_get_tpc_info_cuda(uint32_t* num_tpcs, int cuda_dev);
 
 extern void libsmctrl_false_launch_callback();
 
+extern void assign_hash_insert(void*);
+
 /*
     Communication between cuLaunchKernel() and QMD.
     when cuLaunchKernel() is called with original grid dimension N, block dimension M.
@@ -91,7 +93,8 @@ typedef struct LaunchMetaData_t {
 
 #define MAX_ATOMMETADATA 1000;
 
-extern LaunchMetaData_t launchMetaData[MAX_ATOMMETADATA];
+extern LaunchMetaData_t* launchMetaData;
+
 extern uint32_t callback_mode;
 
 #ifdef __cplusplus

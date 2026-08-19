@@ -4,29 +4,68 @@
     Defines wrapper.
 
 */ 
+#define MAP_LENGTH 1024
+
 #include <stdio.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include "wrapper.h"
 
-using StaticMapRefType = decltype(std::declval<cuco::static_map<uint64_t, AtomMetaData>>().ref(cuco::op::insert, cuco::op::find));
-__device__ StaticMapRefType* atomMetaDataTable_ref = nullptr;
+__device__ AtomMetaData atomMetaDataTable[MAP_LENGTH];
 
+void table_insert(uint64_t key, AtomMetaData value) {
+    uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
+    AtomMetaData metadata;
+    
+    for(int i = 0; i < MAP_LENGTH; i++) {
+        cudaMemcpyFromSymbol(&metadata, atomMetaDataTable, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx);
+        if(metadata.key == 0) {
+            cudaMemcpyToSymbol(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx);
+            return;
+        }
+        idx = (idx + 1) % MAP_LENGTH;
+    }
+
+}
+
+__device__ AtomMetaData table_find(uint64_t key) {
+    uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
+    
+    for(int i = 0; i < MAP_LENGTH; i++) {
+        if(atomMetaDataTable[idx].key == key) {
+            atomMetaDataTable[idx].key = 0;
+            return atomMetaDataTable[idx];
+        }
+        idx = (idx + 1) % MAP_LENGTH;
+    }
+
+    AtomMetaData emptydata;
+    emptydata.key = 0;
+    
+    return emptydata;
+
+}
 
 __global__ void wrapper(const __grid_constant__ uint32_t argu) {
-    auto iter = atomMetaDataTable_ref->find(&argu);
-    if(iter != atomMetaDataTable_ref->end()) {
-        AtomMetaData metadata = iter->second;
-        void* kernel = metadata->kernel;
-        uint32_t lidx = metadata->lidx;
-        uint32_t hidx = metadata->hidx;
+    AtomMetaData metadata = table_find((uint64_t)&argu);
+    void* kernel = (void*)metadata.kernel;
+    uint32_t lidx = metadata.lidx;
+    uint32_t hidx = metadata.hidx;
 
-        int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-        if (workIndex < lidx || workIndex >= hidx) return;
-        ((func_ptr_t)kernel)();
-    }
+    int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    if (workIndex < lidx || workIndex >= hidx) return;
+    ((func_ptr_t)kernel)();
+} 
     
+void setup_metadata_ref() {
+    AtomMetaData zero_ptrs[MAP_LENGTH];
+    for(int i = 0; i < MAP_LENGTH; i++) {
+        zero_ptrs[i].key = 0;
+    }
+    cudaMemcpyToSymbol(atomMetaDataTable, &zero_ptrs, sizeof(zero_ptrs));
 }
+
+
 
 __global__ void do_nothing() {
     return;
@@ -34,9 +73,8 @@ __global__ void do_nothing() {
 
 /* Runs when callback_mode=0. assigns wrapper256 to wrapper_ptr. */
 void initial_wrapper_run() {
-    box256 fakearg;
-    fakearg.data[0] = 0;
-    wrapper256<<<1, 1>>>(fakearg, nullptr, 0, 0);
+    uint32_t fakearg = 0;
+    wrapper<<<1, 1>>>(fakearg);
     cudaDeviceSynchronize();
 }
 
@@ -46,12 +84,5 @@ void initial_nothing_run() {
     cudaDeviceSynchronize();
 }
 
-/* Runs when atomMetaDataTable is setup in threading.cpp. Sets up atomMetaDataTable_ref. */
-void setup_metadata_ref() {
-    auto host_ref = atomMetaDataTable->ref(cuco::op::insert, cuco::op::find);
-    StaticMapRefType* d_ref_ptr;
-    cudaMalloc(&d_ref_ptr, sizeof(StaticMapRefType));
-    cudaMemcpy(d_ref_ptr, &host_ref, sizeof(StaticMapRefType), cudaMemcpyHostToDevice);
-    cudaMemcpyToSymbol(atomMetaDataTable_ref, &d_ref_ptr, sizeof(StaticMapRefType*));
-    cudaFree(d_ref_ptr);
-}
+
+

@@ -2,6 +2,7 @@
 	hooking.cpp
 	How to run: env CUDA_VISIBLE_DEVICES=0 LD_PRELOAD=./hooking.so ./threading
 */
+#define MAX_ATOMMETADATA 1000
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -141,6 +142,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	launchMetaData_hooking[kptr_idx].original_grid_dim = gridDimX;
 	launchMetaData_hooking[kptr_idx].original_block_dim = blockDimX;
 	launchMetaData_hooking[kptr_idx].atom_size = atom_size;
+	fprintf(stderr, "[cuHook] alive from %d!\n", idx);
 
 	// (Fake launch)
 	// real_cuLaunchKernel(f, 1, 1, 1, kptr_idx, 1, 1, sharedMemBytes, (CUstream)fl_stream, kernelParams, extra);
@@ -261,73 +263,5 @@ void* dlsym(void* handle, const char* symbol) {
 
     return real_dlsym(handle, symbol);
 }
-
-
-/*
-cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream)
-{
-	if (kernel_func == NULL) {
-		void* cudart_handle = dlopen("libcudart.so", RTLD_NOW | RTLD_GLOBAL);
-		*(void **)(&kernel_func) = dlsym (cudart_handle, "cudaLaunchKernel");
-		assert (kernel_func != NULL);
-	}
-
-	if(no_hook) {
-		// immediately run the kernel.
-		fprintf(stderr, "no-hook launch of %p\n", func);
-		return (*kernel_func)(func, gridDim, blockDim, args, sharedMem, stream);
-	}
-
-	fprintf(stderr, "caught call from someone!\n");
-	int idx = get_idx();
-	fprintf(stderr, "caught call from %d!\n", idx);
-
-	// inspect kernel size and setup atomization info.
-	// for now, we assume they only have 1 dimension.
-
-	// TODO: dynamically adjust atom_size(need to look at lithOS paper.)
-	// TODO: expand them to 3 dimensions.
-	int atom_size = 1024;
-	int atom_num = ((gridDim.x * blockDim.x) % atom_size == 0) ? (gridDim.x * blockDim.x / atom_size) : (gridDim.x * blockDim.x / atom_size + 1);
-
-	pthread_mutex_lock(&kernel_ptrs_mutex);
-	int kptr_idx = kernel_ptrs_index;
-	kernel_ptrs_index = (kernel_ptrs_index + 1) % MAX_KERNEL_PTRS;
-	if(kernel_ptrs_index == 0) kernel_ptrs_index = 1;
-	pthread_mutex_unlock(&kernel_ptrs_mutex);
-
-	// Fake launch.
-	dim3 dim_of_idx = dim3(kptr_idx, 1, 1);
-	(*kernel_func)(func, gridDim, dim_of_idx, args, sharedMem, fl_stream);
-
-	cudaError_t err = cudaSuccess;
-	kernel_record new_kernel_record;
-	
-	assert(work_queue_mutex != NULL);
-	assert(work_queue != NULL);
-
-	// queue multiple kernels of same instance
-	new_kernel_record = {func, gridDim, blockDim, args, sharedMem, stream, kptr_idx, 0, atom_size};
-	union func_data new_func_data;
-	new_func_data.krecord = new_kernel_record;
-	func_record new_record = {KERNEL_RECORD, new_func_data};
-
-	pthread_mutex_lock(work_queue_mutex[idx]);
-
-	// Atomization.
-	for(int i=0; i<atom_num; i++) {
-		work_queue[idx]->push(new_record);
-		new_record.data.krecord.lidx += atom_size;
-		new_record.data.krecord.hidx += atom_size;
-	}
-	
-
-	pthread_mutex_unlock(work_queue_mutex[idx]);
-
-	block(idx, work_queue_mutex, work_queue);
-
-    return err;
-}
-*/
 
 }

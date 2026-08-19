@@ -64,9 +64,10 @@ typedef struct scheduler_arg {
 	int PLACEHOLDER;
 } scheduler_arg;
 
-cuco::static_map<uint64_t, AtomMetaData>* atomMetaDataTable;
 
-
+void hash_insert(uint64_t key, AtomMetaData value) {
+	table_insert(key, value);
+}
 
 /* imported from Orion, RTLD_DEFAULT -> handle */
 void register_functions() {
@@ -80,6 +81,9 @@ void register_functions() {
 	// for inspections, we need to load those functions too.
 	*(void **)(&actual_cuFuncGetParamInfo) = dlsym (handle, "cuFuncGetParamInfo");
 	assert (actual_cuFuncGetParamInfo != NULL);
+
+	// assign hash_insert_callback of libsmctrl.
+	assign_hash_insert((void*)hash_insert);
 
 }
 
@@ -109,15 +113,8 @@ void variables_setup() {
 	no_hook_thr = (bool*)dlsym(klib, "no_hook");
 
 	// 5. launch metadata address sharing to hooking.cpp
-	(LaunchMetaData_hooking_t**) launchMeta = (LaunchMetaData_hooking_t**)dlsym(klib, "launchMetaData_hooking");
-	*launchMeta = launchMetaData;
-
-	// 6. crate static map used for atommetadata.
-	atomMetaDataTable = new cuco::static_map<uint64_t, AtomMetaData>{
-        4096,
-        cuco::empty_key{-1},
-        cuco::empty_value{{-1, -1, -1}}
-    };
+	LaunchMetaData_hooking_t** launchMeta = (LaunchMetaData_hooking_t**)dlsym(klib, "launchMetaData_hooking");
+	*launchMeta = (LaunchMetaData_hooking_t*)launchMetaData;
 
 	// for now, those are just all. now we can use those variables in hooking.cpp.
 }
@@ -159,6 +156,7 @@ void create_streams() {
 	call initial_wrapper_run() and initial_nothing_run() to assign
 	wrapper256() (and more later!), do_nothing to variables at libsmctrl.c.
 
+	+ call assign_hash_insert() to assign hash insert function to libsmctrl.
 */
 void assign_launch() {
 	libsmctrl_false_launch_callback();
@@ -210,7 +208,7 @@ void* scheduler(void* scarg) {
 			// fprintf(stderr, "job %d running\n", turn);
 			// fprintf(stderr, "sched_streams[turn]: %p\n", *sched_streams[turn]);
 
-    		(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernel_args, record.extra);
+    		(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 
 			(*work_queue[turn]).pop();
 			// fprintf(stderr, "scheduler finish job of #%d\n", turn);
