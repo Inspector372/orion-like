@@ -18,11 +18,14 @@ void table_insert(uint64_t key, AtomMetaData value) {
     AtomMetaData metadata;
     
     for(int i = 0; i < MAP_LENGTH; i++) {
+        fprintf(stderr, "table_insert, mem_copy\n");
         cudaMemcpyFromSymbol(&metadata, atomMetaDataTable, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx);
         if(metadata.key == 0) {
+            fprintf(stderr, "table_insert correct, mem_copy\n");
             cudaMemcpyToSymbol(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx);
             return;
         }
+        fprintf(stderr, "hello? %d\n", i);
         idx = (idx + 1) % MAP_LENGTH;
     }
 
@@ -57,7 +60,7 @@ __global__ void wrapper(const __grid_constant__ uint32_t argu) {
     ((func_ptr_t)kernel)();
 } 
     
-void setup_metadata_ref() {
+void setup_metadata() {
     AtomMetaData zero_ptrs[MAP_LENGTH];
     for(int i = 0; i < MAP_LENGTH; i++) {
         zero_ptrs[i].key = 0;

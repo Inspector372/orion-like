@@ -66,6 +66,7 @@ typedef struct scheduler_arg {
 
 
 void hash_insert(uint64_t key, AtomMetaData value) {
+	fprintf(stderr, "hash_insert!\n");
 	table_insert(key, value);
 }
 
@@ -115,6 +116,9 @@ void variables_setup() {
 	// 5. launch metadata address sharing to hooking.cpp
 	LaunchMetaData_hooking_t** launchMeta = (LaunchMetaData_hooking_t**)dlsym(klib, "launchMetaData_hooking");
 	*launchMeta = (LaunchMetaData_hooking_t*)launchMetaData;
+
+	// 6. Setup metadata table.
+	setup_metadata();
 
 	// for now, those are just all. now we can use those variables in hooking.cpp.
 }
@@ -205,13 +209,13 @@ void* scheduler(void* scarg) {
 			record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
 
 			// TODO: how to pass status?
-			// fprintf(stderr, "job %d running\n", turn);
+			fprintf(stderr, "job %d running\n", turn);
 			// fprintf(stderr, "sched_streams[turn]: %p\n", *sched_streams[turn]);
 
     		(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 
 			(*work_queue[turn]).pop();
-			// fprintf(stderr, "scheduler finish job of #%d\n", turn);
+			fprintf(stderr, "scheduler finish job of #%d\n", turn);
 			job_count++;
 
 		}

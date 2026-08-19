@@ -139,6 +139,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	if(kernel_ptrs_index == 0) kernel_ptrs_index = 1;
 	pthread_mutex_unlock(&kernel_ptrs_mutex);
 
+	fprintf(stderr, "[cuHook] launchMetaData_hooking from %d: %p\n", idx, launchMetaData_hooking);
 	launchMetaData_hooking[kptr_idx].original_grid_dim = gridDimX;
 	launchMetaData_hooking[kptr_idx].original_block_dim = blockDimX;
 	launchMetaData_hooking[kptr_idx].atom_size = atom_size;
@@ -170,8 +171,9 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	
 
 	pthread_mutex_unlock(work_queue_mutex[idx]);
-
+	fprintf(stderr, "[cuHook] block-start from %d!\n", idx);
 	block(idx, work_queue_mutex, work_queue);
+	fprintf(stderr, "[cuHook] block-end from %d!\n", idx);
 
     return err;
 

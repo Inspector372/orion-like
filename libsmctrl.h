@@ -93,7 +93,7 @@ typedef struct LaunchMetaData_t {
 
 #define MAX_ATOMMETADATA 1000;
 
-extern LaunchMetaData_t* launchMetaData;
+extern LaunchMetaData_t launchMetaData[];
 
 extern uint32_t callback_mode;
 
