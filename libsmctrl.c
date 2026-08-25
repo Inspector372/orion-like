@@ -553,8 +553,8 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		uint64_t buffer_addr = (*buffer_start) & 0x0001ffffffffffff;
 		uint32_t index = *griddimx_ptr;
 
-		uint32_t lidx = launchMetaData[index].atom_size * (*blockdimx_ptr);
-		uint32_t hidx = launchMetaData[index].atom_size * (*blockdimx_ptr + 1);
+		uint32_t lidx = launchMetaData[index].atom_size * (*blockdimx_ptr - 1);
+		uint32_t hidx = launchMetaData[index].atom_size * (*blockdimx_ptr);
 		
 		// TODO: put (buffer_addr + 0x160) => (program_addr, lidx, hidx) in hash table.
 		AtomMetaData_t metadata;

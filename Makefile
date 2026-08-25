@@ -10,11 +10,11 @@ hooking.so:
 
 kernel_example.o: 
 	nvcc -cudart=shared -std=c++11 -c -o kernel_example.o kernel_example.cu -lcublasLt
+
 # -G option is important, this ignores some compiler optimization,
 # which leads to failure of kernel-inside-kernel launch.
-
 wrapper.o: 
-	nvcc -G -cudart=shared -std=c++17 -arch=sm_70 -c -o wrapper.o wrapper.cu 
+	nvcc -G -cudart=shared -std=c++11 -arch=sm_70 -c -o wrapper.o wrapper.cu 
 
 threading: 
 	nvcc -Xcompiler -pthread threading.cpp kernel_example.o wrapper.o libsmctrl.o -o threading -ldl -lcudart -lcuda -lcublasLt -L/usr/local/cuda-12.8/lib64/stubs

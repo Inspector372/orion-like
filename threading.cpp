@@ -21,7 +21,7 @@
 #include "wrapper.h"
 #include "libsmctrl.h"
 
-#define THREAD_NUM 4
+#define THREAD_NUM 1
 #define LEN 4532
 
 using namespace std;
@@ -49,6 +49,10 @@ pthread_mutex_t start_mutex;
 // but for now it has no use.
 pthread_mutex_t* kernel_ptrs_mutex_thr;
 
+// This is used for insertion of atomMetaDataTable.
+// only one thread can access this table, otherwise it will mess up things.
+pthread_mutex_t table_mutex;
+
 // the variable that prevents hooking.
 bool* no_hook_thr;
 
@@ -58,6 +62,9 @@ cudaStream_t** sched_streams;
 // Stream for fake launch, gets the highest priority.
 cudaStream_t* fake_launch_stream;
 
+// Stream for metadata passing.
+cudaStream_t metadata_pass_stream;
+
 time_t start_os;
 
 typedef struct scheduler_arg {
@@ -66,8 +73,9 @@ typedef struct scheduler_arg {
 
 
 void hash_insert(uint64_t key, AtomMetaData value) {
-	fprintf(stderr, "hash_insert!\n");
+	pthread_mutex_lock(&table_mutex);
 	table_insert(key, value);
+	pthread_mutex_unlock(&table_mutex);
 }
 
 /* imported from Orion, RTLD_DEFAULT -> handle */
@@ -120,6 +128,10 @@ void variables_setup() {
 	// 6. Setup metadata table.
 	setup_metadata();
 
+	// 7. mutex initialization.
+	// TODO: I forgot initialization for other mutexes. fix this too.
+	pthread_mutex_init(&table_mutex, NULL);
+
 	// for now, those are just all. now we can use those variables in hooking.cpp.
 }
 
@@ -150,6 +162,8 @@ void create_streams() {
 
 	cudaStream_t* fake_launch_stream_ptr = (cudaStream_t*)dlsym(klib, "fl_stream");
 	cudaStreamCreateWithPriority(fake_launch_stream_ptr, cudaStreamNonBlocking, *hp);
+ 
+	cudaStreamCreateWithPriority(&metadata_pass_stream, cudaStreamNonBlocking, *hp);
 
 	free(lp);
 	free(hp);
@@ -209,9 +223,9 @@ void* scheduler(void* scarg) {
 			record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
 
 			// TODO: how to pass status?
-			fprintf(stderr, "job %d running\n", turn);
+			fprintf(stderr, "job %d running, actual launch of %d-%d\n", turn, record.gridDimX, record.blockDimX);
 			// fprintf(stderr, "sched_streams[turn]: %p\n", *sched_streams[turn]);
-
+			
     		(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 
 			(*work_queue[turn]).pop();
@@ -280,8 +294,8 @@ int main(int argc, char** argv) {
 			h_outs[i][j] = 0;
 		}
 		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
-		// pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
-		pthread_create(&threads[i], NULL, softmaxKernel_wrap, (void *)&args[i]);
+		pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
+		// pthread_create(&threads[i], NULL, softmaxKernel_wrap, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 
