@@ -51,6 +51,7 @@ uint32_t wrapper_ptr_upper;
 uint32_t wrapper_ptr_lower;
 LaunchMetaData_t launchMetaData[MAX_ATOMMETADATA];
 uint32_t callback_mode = 0;
+uint8_t wrapper_register_cnt;
 
 uint32_t offsets[1000];
 
@@ -538,11 +539,14 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	uint32_t *griddimx_ptr = (uint32_t*)(**((char***)in_params + 8) + 48);
 	uint16_t *blockdimx_ptr = (uint16_t*)(**((char***)in_params + 8) + 74);
 	uint64_t *buffer_start = (uint16_t*)(**((char***)in_params + 8) + 128);
+	uint8_t *register_cnt_ptr = (uint8_t*)(**((char***)in_params + 8) + 81);
 	// (*buffer_start) & 0x0001ffffffffffff is actual constant buffer address
 	if (callback_mode == 0) {
 		// fetch this to wrapper ptr.
 		wrapper_ptr_upper = *upper_ptr;
 		wrapper_ptr_lower = *lower_ptr;
+		fprintf(stderr, "wrapper register_cnt: %d\n", *register_cnt_ptr);
+		wrapper_register_cnt = *register_cnt_ptr;
 	}
 	else if(callback_mode == 1) {
 		nothing_ptr_upper = *upper_ptr;
@@ -569,6 +573,10 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		
 		*upper_ptr = wrapper_ptr_upper;
 		*lower_ptr = wrapper_ptr_lower;
+
+		fprintf(stderr, "register_cnt: %d\n", *register_cnt_ptr);
+		if(*register_cnt_ptr < wrapper_register_cnt)
+			*register_cnt_ptr = wrapper_register_cnt;
 	}
 }
 

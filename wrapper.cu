@@ -5,6 +5,7 @@
 
 */ 
 #define MAP_LENGTH 1024
+#define MAGIC 0x20200640
 
 #include <stdio.h>
 #include <cuda.h>
@@ -58,7 +59,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
 
 }
 
-__device__ AtomMetaData table_find(uint64_t key) {
+/*__device__ AtomMetaData table_find(uint64_t key) {
     uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
     
     for(int i = 0; i < MAP_LENGTH; i++) {
@@ -74,12 +75,14 @@ __device__ AtomMetaData table_find(uint64_t key) {
     
     return emptydata;
 
-}
+}*/
 
 __global__ void wrapper(const __grid_constant__ uint32_t argu) {
     // AtomMetaData metadata = table_find((uint64_t)&argu);
+    if(argu == MAGIC) return;
     uint64_t ptr = (uint64_t)&argu;
     uint64_t idx = (ptr * 11400714819323198485ULL) % MAP_LENGTH;
+
     int i;
     for(i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable[idx].key == ptr) {
@@ -88,11 +91,10 @@ __global__ void wrapper(const __grid_constant__ uint32_t argu) {
         }
         idx = (idx + 1) % MAP_LENGTH;
     }
-    AtomMetaData metadata = atomMetaDataTable[idx];
 
-    void* kernel = (void*)metadata.kernel;
-    uint32_t lidx = metadata.lidx;
-    uint32_t hidx = metadata.hidx;
+    void* kernel = (void*)atomMetaDataTable[idx].kernel;
+    uint32_t lidx = atomMetaDataTable[idx].lidx;
+    uint32_t hidx = atomMetaDataTable[idx].hidx;
 
     int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
     if (workIndex < lidx || workIndex >= hidx) return;
@@ -115,7 +117,7 @@ __global__ void do_nothing() {
 
 /* Runs when callback_mode=0. assigns wrapper256 to wrapper_ptr. */
 void initial_wrapper_run() {
-    uint32_t fakearg = 0;
+    uint32_t fakearg = MAGIC;
     wrapper<<<1, 1>>>(fakearg);
     cudaDeviceSynchronize();
 }

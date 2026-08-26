@@ -22,7 +22,7 @@
 #include "libsmctrl.h"
 
 #define THREAD_NUM 1
-#define LEN 4532
+#define LEN 1673
 
 using namespace std;
 
