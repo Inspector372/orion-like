@@ -74,26 +74,16 @@ extern void libsmctrl_false_launch_callback();
 
 extern void assign_hash_insert(void*);
 
-/*
-    Communication between cuLaunchKernel() and QMD.
-    when cuLaunchKernel() is called with original grid dimension N, block dimension M.
-    we atomically increase kernel_ptrs_index(name is not changed yet)
-    to get original index for this kernel launch, N', and get number of items M' by atomization.
-    N is indicator of specific kernel launch, and M is atom index.
-    then we set launchMetaData[N'] = {N, M, atom size}
-    then calling cuLaunchKernel(gridDim.x = N', blockDim.x = M')
-    will result QMD holding N' in CTA_THREAD_DIMENSION_0
-    and holding M' in CTA_RASTER_WIDTH.
-*/
+
 typedef struct LaunchMetaData_t {
-    uint32_t original_grid_dim;
-    uint32_t original_block_dim;
-    uint32_t atom_size;
+    uint32_t lidx;
+    uint32_t hidx;
 }LaunchMetaData_t;
 
 #define MAX_ATOMMETADATA 1000;
 
-extern LaunchMetaData_t launchMetaData[];
+extern uint32_t launch_lidx;
+extern uint32_t launch_hidx;
 
 extern uint32_t callback_mode;
 

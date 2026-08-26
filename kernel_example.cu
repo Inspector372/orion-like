@@ -22,11 +22,12 @@
 #include <cmath>
 
 __global__ void addKernel(int* a, int* b, int* out, int N) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t idx = blockIdx.x * 256 + threadIdx.x;
+    // size_t idx = (blockIdx.x % (1 << 32)) * 256 + (blockIdx.x / (1 << 32));
     if (idx < N) 
         out[idx] = a[idx] + b[idx];
-    if(threadIdx.x % 7 == 0)
-        printf("[CHECK] check idx : N = %d, idx = %ld, blockIdx = %lx, threadIdx = %lx\n", N, idx, blockIdx.x, threadIdx.x);
+    //if(threadIdx.x % 7 == 0)
+    //    printf("[CHECK] check idx : N = %d, idx = %ld, blockIdx = %d, threadIdx = %d, blockDim = %d, gridDim = %d\n", N, idx, blockIdx.x, threadIdx.x, blockDim.x, gridDim.x);
 }
 
 void addCheck(int* h_A, int* h_B, int* h_out, int N) {
@@ -42,7 +43,7 @@ void addCheck(int* h_A, int* h_B, int* h_out, int N) {
 extern "C" void* addKernel_wrap(void* arg) {
     int N;
     int* h_A, *h_B, *h_out;
-    int* d_A, *d_B, *d_out;
+    int* d_A, *d_B, *d_C, *d_D, *d_out, *d_outp;
     N = ((addKernel_arg*)arg)->N;
     h_A = ((addKernel_arg*)arg)->h_A;
     h_B = ((addKernel_arg*)arg)->h_B;
@@ -190,6 +191,7 @@ void matMulCheck(float* h_A, float* h_B, float* h_C, int M) {
             }
         }
     }
+    fprintf(stderr, "matmul OK\n");
 }
 
 extern "C" void* matMulKernel_wrap(void* arg) {
@@ -260,12 +262,13 @@ void histCheck(int* h_data, int* h_hist, int N, int numBins, int maxVal) {
             return;
         }
     }
+    fprintf(stderr, "hist OK\n");
     free(expected);
 }
 
 extern "C" void* histKernel_wrap(void* arg) {
     (void)arg;
-    int N = 1 << 20;
+    int N = 1 << 15;
     int numBins = 16;
     int maxVal = 999;
     int *h_data, *h_hist;
@@ -379,7 +382,7 @@ void softmaxCheck(float* h_in, float* h_out, int rows, int cols) {
 
 extern "C" void* softmaxKernel_wrap(void* arg) {
     (void)arg;
-    int rows = 1024, cols = 1024;
+    int rows = 256, cols = 256;
     size_t bytes = (size_t)rows * cols * sizeof(float);
     float *h_in, *h_out;
     float *d_in, *d_out;
@@ -497,6 +500,7 @@ extern "C" void* test_cublas(void* arg) {
     printf("  C[%dx%d] first row:", M, N);
     for (int j = 0; j < N; ++j) printf(" %f", h_C[j]);
     printf("\n\n");
+    printf("Cublas OK...?\n");
  
     // Cleanup
     cublasLtMatmulPreferenceDestroy(pref);
@@ -509,5 +513,6 @@ extern "C" void* test_cublas(void* arg) {
     CUDA_CHECK(cudaFree(d_C));
     CUDA_CHECK(cudaFree(d_B));
     CUDA_CHECK(cudaFree(d_A));
+    printf("Cublas OK!\n");
     return nullptr;
 }

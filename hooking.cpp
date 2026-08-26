@@ -2,7 +2,6 @@
 	hooking.cpp
 	How to run: env CUDA_VISIBLE_DEVICES=0 LD_PRELOAD=./hooking.so ./threading
 */
-#define MAX_ATOMMETADATA 1000
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -24,15 +23,11 @@
 using namespace std;
 
 bool no_hook = true;
-uint32_t kernel_ptrs_index = 1;
-pthread_mutex_t kernel_ptrs_mutex;
 
 pthread_t* thread_ids;
 queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 cudaStream_t fl_stream;
-
-LaunchMetaData_hooking_t* launchMetaData_hooking;
 
 CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
 
@@ -164,20 +159,6 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	int atom_size = 1024;
 	int atom_num = ((gridDimX * blockDimX) % atom_size == 0) ? (gridDimX * blockDimX / atom_size) : (gridDimX * blockDimX / atom_size + 1);
 
-
-	// TODO: stall here if kernel_ptrs[] is full, waiting previous jobs to be ended.
-	pthread_mutex_lock(&kernel_ptrs_mutex);
-	int kptr_idx = kernel_ptrs_index;
-	kernel_ptrs_index = (kernel_ptrs_index + 1) % MAX_ATOMMETADATA;
-	if(kernel_ptrs_index == 0) kernel_ptrs_index = 1;
-	pthread_mutex_unlock(&kernel_ptrs_mutex);
-
-	fprintf(stderr, "[cuHook] launchMetaData_hooking from %d: %p\n", idx, launchMetaData_hooking);
-	launchMetaData_hooking[kptr_idx].original_grid_dim = gridDimX;
-	launchMetaData_hooking[kptr_idx].original_block_dim = blockDimX;
-	launchMetaData_hooking[kptr_idx].atom_size = atom_size;
-	fprintf(stderr, "[cuHook] alive from %d!\n", idx);
-
 	// (Fake launch)
 	// real_cuLaunchKernel(f, 1, 1, 1, kptr_idx, 1, 1, sharedMemBytes, (CUstream)fl_stream, kernelParams, extra);
 
@@ -187,9 +168,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	assert(work_queue_mutex != NULL);
 	assert(work_queue != NULL);
 
-	// queue multiple kernels of same instance, with gridDimX = kernel_ptrs_index
-	// need synchronization at libsmctrl
-	new_record = {f, kptr_idx, gridDimY, gridDimZ, 1, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra};
+	new_record = {f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra, 0, atom_size};
 	union record_data new_record_data;
 	new_record_data.r_cuLaunchKernel = new_record;
 	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
@@ -199,7 +178,8 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	// Atomization.
 	for(int i=0; i<atom_num; i++) {
 		work_queue[idx]->push(new_qrecord);
-		new_qrecord.data.r_cuLaunchKernel.blockDimX += 1;
+		new_qrecord.data.r_cuLaunchKernel.lidx += atom_size;
+		new_qrecord.data.r_cuLaunchKernel.hidx += atom_size;
 	}
 	
 

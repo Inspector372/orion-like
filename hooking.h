@@ -17,6 +17,9 @@ typedef struct record_cuLaunchKernel {
 	CUstream hStream;
 	void** kernelParams;
 	void** extra;
+
+	uint32_t lidx;
+	uint32_t hidx;
 } record_cuLaunchKernel;
 
 typedef struct record_cudaEvent {
@@ -35,9 +38,3 @@ typedef struct queue_record {
 	enum record_type type;
 	union record_data data;
 } queue_record;
-
-typedef struct LaunchMetaData_hooking_t {
-    uint32_t original_grid_dim;
-    uint32_t original_block_dim;
-    uint32_t atom_size; 
-}LaunchMetaData_hooking_t;

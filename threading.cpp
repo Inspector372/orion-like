@@ -21,8 +21,8 @@
 #include "wrapper.h"
 #include "libsmctrl.h"
 
-#define THREAD_NUM 1
-#define LEN 1423
+#define THREAD_NUM 3
+#define LEN 14232
 
 using namespace std;
 
@@ -127,10 +127,6 @@ void variables_setup() {
 	// 4. no-hook switch.
 	no_hook_thr = (bool*)dlsym(klib, "no_hook");
 
-	// 5. launch metadata address sharing to hooking.cpp
-	LaunchMetaData_hooking_t** launchMeta = (LaunchMetaData_hooking_t**)dlsym(klib, "launchMetaData_hooking");
-	*launchMeta = (LaunchMetaData_hooking_t*)launchMetaData;
-
 	// 6. Setup metadata table.
 	setup_metadata();
 
@@ -228,7 +224,8 @@ void* scheduler(void* scarg) {
 				case RECORD_CULAUNCHKERNEL: {
 					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
 					// TODO: how to pass status?
-					fprintf(stderr, "job %d running, actual launch of %d-%d\n", turn, record.gridDimX, record.blockDimX);
+					launch_lidx = record.lidx;
+					launch_hidx = record.hidx;
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					(*work_queue[turn]).pop();
 					fprintf(stderr, "scheduler finish assigning job of #%d\n", turn);
@@ -238,7 +235,7 @@ void* scheduler(void* scarg) {
 
 				case RECORD_CUDAEVENT: {
 					record_cudaEvent record_event = qrecord.data.r_cudaEvent;
-					fprintf(stderr, "event recorded for #%d\n", turn);
+					// fprintf(stderr, "event recorded for #%d\n", turn);
 					cudaEventRecord(record_event.event, *sched_streams[turn]);
 					(*work_queue[turn]).pop();
 				}
@@ -314,7 +311,7 @@ int main(int argc, char** argv) {
 		}
 		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
 		// pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
-		pthread_create(&threads[i], NULL, softmaxKernel_wrap, (void *)&args[i]);
+		pthread_create(&threads[i], NULL, test_cublas, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 

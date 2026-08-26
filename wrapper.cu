@@ -5,7 +5,7 @@
 
 */ 
 #define MAP_LENGTH 1024
-#define MAGIC 0x20200640
+#define MAGIC 0x2020064020200640ULL
 
 #include <stdio.h>
 #include <cuda.h>
@@ -77,7 +77,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
 
 }*/
 
-__global__ void wrapper(const __grid_constant__ uint32_t argu) {
+__global__ void wrapper(const __grid_constant__ uint64_t argu) {
     // AtomMetaData metadata = table_find((uint64_t)&argu);
     if(argu == MAGIC) return;
     uint64_t ptr = (uint64_t)&argu;
@@ -96,10 +96,10 @@ __global__ void wrapper(const __grid_constant__ uint32_t argu) {
     uint32_t lidx = atomMetaDataTable[idx].lidx;
     uint32_t hidx = atomMetaDataTable[idx].hidx;
 
-    int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    if(workIndex == 0) {
-        printf("lidx : %d, hidx : %d\n", lidx, hidx);
-    }
+    size_t workIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    /*if(workIndex == 0) {
+        printf("lidx : %d, hidx : %d, blockDim = %d, gridDIm = %d\n", lidx, hidx, blockDim.x, gridDim.x);
+    }*/
     if (workIndex < lidx || workIndex >= hidx) return;
     ((func_ptr_t)kernel)();
 } 
@@ -120,7 +120,7 @@ __global__ void do_nothing() {
 
 /* Runs when callback_mode=0. assigns wrapper256 to wrapper_ptr. */
 void initial_wrapper_run() {
-    uint32_t fakearg = MAGIC;
+    uint64_t fakearg = MAGIC;
     wrapper<<<1, 1>>>(fakearg);
     (*actual_cudaDeviceSynchronize)();
 }

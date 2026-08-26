@@ -9,7 +9,7 @@
   !!!! THIS IS MODIFIED VERSION !!!!
   Need to erase some non-used original code, but let's do that later.
 */
-#define MAX_ATOMMETADATA 1000
+#define MAX_THREADNUM 1000
 
 #include <cuda.h>
 
@@ -49,9 +49,13 @@ uint32_t nothing_ptr_upper;
 uint32_t nothing_ptr_lower;
 uint32_t wrapper_ptr_upper;
 uint32_t wrapper_ptr_lower;
-LaunchMetaData_t launchMetaData[MAX_ATOMMETADATA];
+
+uint32_t launch_lidx;
+uint32_t launch_hidx;
+
 uint32_t callback_mode = 0;
 uint8_t wrapper_register_cnt;
+uint8_t wrapper_register_cnt_v;
 
 uint32_t offsets[1000];
 
@@ -536,17 +540,18 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 
 	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
 	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
-	uint32_t *griddimx_ptr = (uint32_t*)(**((char***)in_params + 8) + 48);
-	uint16_t *blockdimx_ptr = (uint16_t*)(**((char***)in_params + 8) + 74);
+
 	uint64_t *buffer_start = (uint16_t*)(**((char***)in_params + 8) + 128);
-	uint8_t *register_cnt_ptr = (uint8_t*)(**((char***)in_params + 8) + 81);
+	uint8_t *register_cnt_v_ptr = (uint8_t*)(**((char***)in_params + 8) + 81);
+	uint8_t *register_cnt_ptr = (uint8_t*)(**((char***)in_params + 8) + 123);
 	// (*buffer_start) & 0x0001ffffffffffff is actual constant buffer address
 	if (callback_mode == 0) {
 		// fetch this to wrapper ptr.
 		wrapper_ptr_upper = *upper_ptr;
 		wrapper_ptr_lower = *lower_ptr;
-		fprintf(stderr, "wrapper register_cnt: %d\n", *register_cnt_ptr);
+		// fprintf(stderr, "wrapper register_cnt: %d\n", *register_cnt_ptr);
 		wrapper_register_cnt = *register_cnt_ptr;
+		wrapper_register_cnt_v = *register_cnt_v_ptr;
 	}
 	else if(callback_mode == 1) {
 		nothing_ptr_upper = *upper_ptr;
@@ -555,31 +560,23 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	else if(callback_mode == 2) {
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
 		uint64_t buffer_addr = (*buffer_start) & 0x0001ffffffffffff;
-		uint32_t index = *griddimx_ptr;
-
-		uint32_t lidx = launchMetaData[index].atom_size * (*blockdimx_ptr - 1);
-		uint32_t hidx = launchMetaData[index].atom_size * (*blockdimx_ptr);
 		
 		// TODO: put (buffer_addr + 0x160) => (program_addr, lidx, hidx) in hash table.
 		AtomMetaData_t metadata;
 		metadata.key = buffer_addr + 0x160;
 		metadata.kernel = program_addr;
-		metadata.lidx = lidx;
-		metadata.hidx = hidx;
+		metadata.lidx = launch_lidx;
+		metadata.hidx = launch_hidx;
 		hash_insert_callback(buffer_addr + 0x160, metadata);
-
-		fprintf(stderr, "original grid dim: %d\n", launchMetaData[index].original_grid_dim);
-		fprintf(stderr, "original block dim: %d\n", launchMetaData[index].original_block_dim);
-
-		*griddimx_ptr = launchMetaData[index].original_grid_dim;
-		*blockdimx_ptr = launchMetaData[index].original_block_dim;
 		
 		*upper_ptr = wrapper_ptr_upper;
 		*lower_ptr = wrapper_ptr_lower;
 
-		fprintf(stderr, "register_cnt: %d\n", *register_cnt_ptr);
+		// fprintf(stderr, "register_cnt: %d\n", *register_cnt_ptr);
 		if(*register_cnt_ptr < wrapper_register_cnt)
 			*register_cnt_ptr = wrapper_register_cnt;
+		if(*register_cnt_v_ptr < wrapper_register_cnt_v)
+			*register_cnt_v_ptr = wrapper_register_cnt_v;
 	}
 }
 
