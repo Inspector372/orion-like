@@ -97,6 +97,9 @@ __global__ void wrapper(const __grid_constant__ uint32_t argu) {
     uint32_t hidx = atomMetaDataTable[idx].hidx;
 
     int workIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    if(workIndex == 0) {
+        printf("lidx : %d, hidx : %d\n", lidx, hidx);
+    }
     if (workIndex < lidx || workIndex >= hidx) return;
     ((func_ptr_t)kernel)();
 } 
@@ -119,13 +122,13 @@ __global__ void do_nothing() {
 void initial_wrapper_run() {
     uint32_t fakearg = MAGIC;
     wrapper<<<1, 1>>>(fakearg);
-    cudaDeviceSynchronize();
+    (*actual_cudaDeviceSynchronize)();
 }
 
 /* Runs when callback_mode=1. assigns do_nothing to nothing_ptr_upper/lower. */
 void initial_nothing_run() {
     do_nothing<<<1, 1>>>();
-    cudaDeviceSynchronize();
+    (*actual_cudaDeviceSynchronize)();
 }
 
 

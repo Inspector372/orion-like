@@ -15,6 +15,7 @@ extern CUfunction wrapper_handle;
 extern void table_insert(uint64_t, AtomMetaData);
 extern void setup_metadata();
 extern cudaStream_t metadata_pass_stream;
+extern cudaError_t (*actual_cudaDeviceSynchronize)(void);
 
 void initial_wrapper_run();
 void initial_nothing_run();

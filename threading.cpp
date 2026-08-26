@@ -22,13 +22,15 @@
 #include "libsmctrl.h"
 
 #define THREAD_NUM 1
-#define LEN 1673
+#define LEN 1423
 
 using namespace std;
 
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 
 CUresult (*actual_cuFuncGetParamInfo)(CUfunction, size_t, size_t*, size_t*);
+
+cudaError_t (*actual_cudaDeviceSynchronize)(void);
 
 
 void* klib;
@@ -90,6 +92,10 @@ void register_functions() {
 	// for inspections, we need to load those functions too.
 	*(void **)(&actual_cuFuncGetParamInfo) = dlsym (handle, "cuFuncGetParamInfo");
 	assert (actual_cuFuncGetParamInfo != NULL);
+
+	*(void **)(&actual_cudaDeviceSynchronize) = dlsym (RTLD_NEXT, "cudaDeviceSynchronize");
+	assert (actual_cudaDeviceSynchronize != NULL);
+
 
 	// assign hash_insert_callback of libsmctrl.
 	assign_hash_insert((void*)hash_insert);
@@ -216,21 +222,34 @@ void* scheduler(void* scarg) {
 		if(!(*work_queue[turn]).empty()) {
 			// this routine should be something like assign_job(),
 			// and changed when we intercept other cuda calls.
-
-			// TODO: add branch for other record types.
-			// currently all types are r_cuLaunchKernel.
 			queue_record qrecord = (*work_queue[turn]).front();
-			record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
 
-			// TODO: how to pass status?
-			fprintf(stderr, "job %d running, actual launch of %d-%d\n", turn, record.gridDimX, record.blockDimX);
-			// fprintf(stderr, "sched_streams[turn]: %p\n", *sched_streams[turn]);
+			switch(qrecord.type) {
+				case RECORD_CULAUNCHKERNEL: {
+					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
+					// TODO: how to pass status?
+					fprintf(stderr, "job %d running, actual launch of %d-%d\n", turn, record.gridDimX, record.blockDimX);
+					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+					(*work_queue[turn]).pop();
+					fprintf(stderr, "scheduler finish assigning job of #%d\n", turn);
+					job_count++;
+				}
+				break;
+
+				case RECORD_CUDAEVENT: {
+					record_cudaEvent record_event = qrecord.data.r_cudaEvent;
+					fprintf(stderr, "event recorded for #%d\n", turn);
+					cudaEventRecord(record_event.event, *sched_streams[turn]);
+					(*work_queue[turn]).pop();
+				}
+				break;
+
+				default:
+				fprintf(stderr, "Error: unknown record type\n");
+			}
+
 			
-    		(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
-
-			(*work_queue[turn]).pop();
-			fprintf(stderr, "scheduler finish job of #%d\n", turn);
-			job_count++;
+    		
 
 		}
 		pthread_mutex_unlock(work_queue_mutex[turn]);
@@ -294,8 +313,8 @@ int main(int argc, char** argv) {
 			h_outs[i][j] = 0;
 		}
 		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
-		pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
-		// pthread_create(&threads[i], NULL, softmaxKernel_wrap, (void *)&args[i]);
+		// pthread_create(&threads[i], NULL, addKernel_wrap, (void *)&args[i]);
+		pthread_create(&threads[i], NULL, softmaxKernel_wrap, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 

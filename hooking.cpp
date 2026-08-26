@@ -99,6 +99,39 @@ void block(int idx, pthread_mutex_t** mutexes, queue<queue_record>** kqueues) {
 */
 extern "C" {
 
+/*
+	We need some synchronization behavior for this one.
+	for that, *exact* behavior of cudaDeviceSynchronize() need to be inspected.
+
+	For now, it creates a cudaevent, attaches in work_queue.
+	and wait until it gets scheduled and eventually finished.
+	this works because one thread(user) got only one thread. 
+*/
+cudaError_t cudaDeviceSynchronize(void) {
+	
+	cudaEvent_t event;
+	cudaEventCreate(&event);
+	int idx = get_idx();
+
+	record_cudaEvent new_record;
+	new_record = {event};
+	union record_data new_record_data;
+	new_record_data.r_cudaEvent = new_record;
+	queue_record new_qrecord = {RECORD_CUDAEVENT, new_record_data};
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+	work_queue[idx]->push(new_qrecord);
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+	
+
+	fprintf(stderr, "thread %d, waiting until finish\n", idx);
+	block(idx, work_queue_mutex, work_queue);
+	cudaEventSynchronize(event);
+	fprintf(stderr, "thread %d, finished waiting\n", idx);
+
+	cudaEventDestroy(event);
+}
+
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
                         unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {

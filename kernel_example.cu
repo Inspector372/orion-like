@@ -25,12 +25,15 @@ __global__ void addKernel(int* a, int* b, int* out, int N) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < N) 
         out[idx] = a[idx] + b[idx];
+    if(threadIdx.x % 7 == 0)
+        printf("[CHECK] check idx : N = %d, idx = %ld, blockIdx = %lx, threadIdx = %lx\n", N, idx, blockIdx.x, threadIdx.x);
 }
 
 void addCheck(int* h_A, int* h_B, int* h_out, int N) {
     for(int i = 0; i < N; i++) {
         if(h_A[i] + h_B[i] != h_out[i]) {
             fprintf(stderr, "mismatch at %d, h_A[%d]=%d, h_b[%d]=%d, h_out[%d]=%d\n", i, i, h_A[i], i, h_B[i], i, h_out[i]);
+            fprintf(stderr, "final good match at %d, h_A[%d]=%d, h_b[%d]=%d, h_out[%d]=%d\n", i-1, i-1, h_A[i-1], i-1, h_B[i-1], i-1, h_out[i-1]);
             return;
         }
     }
@@ -45,6 +48,7 @@ extern "C" void* addKernel_wrap(void* arg) {
     h_B = ((addKernel_arg*)arg)->h_B;
     h_out = ((addKernel_arg*)arg)->h_out;
     pthread_mutex_t* smutex = ((addKernel_arg*)arg)->smutex;
+    cudaError_t err;
     
     // block before setting everything.
     pthread_mutex_lock(smutex);
@@ -60,23 +64,23 @@ extern "C" void* addKernel_wrap(void* arg) {
 
     int threads = 256;
     int blocks = (N + threads - 1) / threads;
-    cudaError_t err = cudaGetLastError();
 
     addKernel<<<blocks, threads>>>(d_A, d_B, d_out, N);
-
+    
     // can this be a problem? this is not a wrapped method.
     cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    fprintf(stderr, "Kernel Error: %s\n", cudaGetErrorString(err));
 
     cudaMemcpy(h_out, d_out, N * sizeof(int), cudaMemcpyDeviceToHost);
+    err = cudaGetLastError();
+    fprintf(stderr, "Memcpy Error: %s\n", cudaGetErrorString(err));
 
     addCheck(h_A, h_B, h_out, N);
 
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_out);
-
-    err = cudaGetLastError();
-    fprintf(stderr, "Error: %s\n", cudaGetErrorString(err));
 
     return nullptr;
 }

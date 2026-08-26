@@ -568,6 +568,9 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		metadata.hidx = hidx;
 		hash_insert_callback(buffer_addr + 0x160, metadata);
 
+		fprintf(stderr, "original grid dim: %d\n", launchMetaData[index].original_grid_dim);
+		fprintf(stderr, "original block dim: %d\n", launchMetaData[index].original_block_dim);
+
 		*griddimx_ptr = launchMetaData[index].original_grid_dim;
 		*blockdimx_ptr = launchMetaData[index].original_block_dim;
 		

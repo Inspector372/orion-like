@@ -1,6 +1,7 @@
 
 enum record_type {
 	RECORD_CULAUNCHKERNEL,
+	RECORD_CUDAEVENT,
 	OTHERS
 };
 
@@ -18,8 +19,13 @@ typedef struct record_cuLaunchKernel {
 	void** extra;
 } record_cuLaunchKernel;
 
+typedef struct record_cudaEvent {
+	cudaEvent_t event;
+} record_cudaEvent;
+
 union record_data {
 	record_cuLaunchKernel r_cuLaunchKernel;
+	record_cudaEvent r_cudaEvent;
 
 	record_data() {}
 	~record_data(){};
