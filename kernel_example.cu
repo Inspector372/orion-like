@@ -517,6 +517,145 @@ extern "C" void* test_cublas(void* arg) {
     return nullptr;
 }
 
+
+
+// 2D Row-Major Matrix Initializer
+void initMatrix2D(std::vector<float>& mat, int rows, int cols, float scale) {
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            mat[r * cols + c] = static_cast<float>(r * cols + c) * scale;
+        }
+    }
+}
+
+// Host verification helper
+void verifyResults(const std::vector<float>& h_A, const std::vector<float>& h_B, 
+                   const std::vector<float>& h_C, int M, int K, int N) {
+    bool passed = true;
+    for (int r = 0; r < M; ++r) {
+        for (int c = 0; c < N; ++c) {
+            float expected = 0.0f;
+            for (int k = 0; k < K; ++k) {
+                expected += h_A[r * K + k] * h_B[k * N + c];
+            }
+            float got = h_C[r * N + c];
+            if (std::fabs(expected - got) > 1e-3f) {
+                fprintf(stderr, "Mismatch at (%d,%d): expected=%f, got=%f\n", r, c, expected, got);
+                passed = false;
+                break;
+            }
+        }
+        if (!passed) break;
+    }
+    if (passed) {
+        printf("Verification OK: Host calculations match cuBLASLt output!\n");
+    }
+}
+
+extern "C" void* test_cublas_prime(void* arg) {
+    (void)arg;
+    pthread_mutex_t* smutex = ((addKernel_arg*)arg)->smutex;
+    pthread_mutex_lock(smutex);
+    pthread_mutex_unlock(smutex);
+
+    // Rescaled dimensions
+    const int M = 32, K = 32, N = 32;
+    const float alpha = 1.0f, beta = 0.0f;
+
+    printf("=== FP32 cuBLASLt MatMul (M=%d, K=%d, N=%d) ===\n", M, K, N);
+    printf("Total compute footprint: %d FLOPs\n", 2 * M * N * K);
+
+    std::vector<float> h_A(M * K), h_B(K * N), h_C(M * N, 0.0f);
+    initMatrix2D(h_A, M, K, 0.01f);
+    initMatrix2D(h_B, K, N, 0.02f);
+
+    float *d_A, *d_B, *d_C;
+    CUDA_CHECK(cudaMalloc(&d_A, h_A.size() * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_B, h_B.size() * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_C, h_C.size() * sizeof(float)));
+
+    CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), h_A.size() * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), h_B.size() * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(d_C, 0, h_C.size() * sizeof(float)));
+
+    // --- cuBLASLt Handle ---
+    cublasLtHandle_t ltHandle;
+    cublasLtCreate(&ltHandle);
+
+    // --- Layout Descriptors ---
+    cublasLtMatrixLayout_t layoutA, layoutB, layoutC;
+    cublasLtMatrixLayoutCreate(&layoutA, CUDA_R_32F, K, M, K); // A^T
+    cublasLtMatrixLayoutCreate(&layoutB, CUDA_R_32F, N, K, N); // B^T
+    cublasLtMatrixLayoutCreate(&layoutC, CUDA_R_32F, N, M, N); // C^T
+
+    // --- MatMul Descriptor ---
+    cublasLtMatmulDesc_t matmulDesc;
+    cublasLtMatmulDescCreate(&matmulDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+
+    cublasOperation_t opN = CUBLAS_OP_N;
+    cublasLtMatmulDescSetAttribute(matmulDesc, CUBLASLT_MATMUL_DESC_TRANSA, &opN, sizeof(opN));
+    cublasLtMatmulDescSetAttribute(matmulDesc, CUBLASLT_MATMUL_DESC_TRANSB, &opN, sizeof(opN));
+
+    // --- Algorithm Selection ---
+    cublasLtMatmulPreference_t pref;
+    cublasLtMatmulPreferenceCreate(&pref);
+    const size_t workspaceSize = 32 * 1024; // 32 KB workspace
+    cublasLtMatmulPreferenceSetAttribute(pref,
+        CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize, sizeof(workspaceSize));
+
+    void* d_workspace;
+    CUDA_CHECK(cudaMalloc(&d_workspace, workspaceSize));
+
+    int returnedResults = 0;
+    cublasLtMatmulHeuristicResult_t heuristicResult{};
+    cublasLtMatmulAlgoGetHeuristic(
+        ltHandle, matmulDesc,
+        layoutB, layoutA, layoutC, layoutC,
+        pref, 1, &heuristicResult, &returnedResults);
+
+    if (returnedResults == 0) {
+        fprintf(stderr, "No algorithm found!\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // --- Execute ---
+    cublasLtMatmul(
+        ltHandle, matmulDesc,
+        &alpha,
+        d_B, layoutB,
+        d_A, layoutA,
+        &beta,
+        d_C, layoutC,
+        d_C, layoutC,
+        &heuristicResult.algo,
+        d_workspace, workspaceSize,
+        0);
+
+    CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, h_C.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+    // Print sample output
+    printf("C[%dx%d] Row 0 (first 5 elements):", M, N);
+    for (int j = 0; j < 5; ++j) printf(" %f", h_C[j]);
+    printf("\n");
+
+    // Verify GPU results against CPU implementation
+    verifyResults(h_A, h_B, h_C, M, K, N);
+
+    // Cleanup
+    cublasLtMatmulPreferenceDestroy(pref);
+    cublasLtMatmulDescDestroy(matmulDesc);
+    cublasLtMatrixLayoutDestroy(layoutC);
+    cublasLtMatrixLayoutDestroy(layoutB);
+    cublasLtMatrixLayoutDestroy(layoutA);
+    cublasLtDestroy(ltHandle);
+    CUDA_CHECK(cudaFree(d_workspace));
+    CUDA_CHECK(cudaFree(d_C));
+    CUDA_CHECK(cudaFree(d_B));
+    CUDA_CHECK(cudaFree(d_A));
+
+    return nullptr;
+}
+
 // Kernel 1: Vector Addition C[i] = A[i] + B[i]
 __global__ void vecAddKernel(const float* A, const float* B, float* C, int N) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;

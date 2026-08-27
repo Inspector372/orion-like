@@ -9,7 +9,6 @@
   !!!! THIS IS MODIFIED VERSION !!!!
   Need to erase some non-used original code, but let's do that later.
 */
-#define MAX_THREADNUM 1000
 
 #include <cuda.h>
 

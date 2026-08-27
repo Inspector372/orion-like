@@ -198,7 +198,6 @@ void* scheduler(void* scarg) {
 	int job_count = 0;
 	int total_job = THREAD_NUM * 10000; // currently only 1 kernel is launched per thread.
 
-	pthread_mutex_lock(&start_mutex);
     pthread_mutex_unlock(&start_mutex);
 	fprintf(stderr, "scheduler init...\n");
 
@@ -309,8 +308,8 @@ int main(int argc, char** argv) {
 			h_outs[i][j] = 0;
 		}
 		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
-		pthread_create(&threads[i], NULL, chainedKernels_wrap, (void *)&args[i]);
-		// pthread_create(&threads[i], NULL, test_cublas, (void *)&args[i]);
+		// pthread_create(&threads[i], NULL, chainedKernels_wrap, (void *)&args[i]);
+		pthread_create(&threads[i], NULL, test_cublas_prime, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 
@@ -329,8 +328,8 @@ int main(int argc, char** argv) {
 
 	// **unblock** every threads and start launching.
 	start_os = time(NULL);
-	printf("launching...\n");
-	pthread_mutex_unlock(&start_mutex);
+	// printf("launching...\n");
+	// pthread_mutex_unlock(&start_mutex);
 
 	// join everything.
 	for(int i = 0; i < THREAD_NUM + 1; i++) {

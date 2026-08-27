@@ -192,10 +192,10 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 }
 
 CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
-    fprintf(stderr, "[HOOK v1] Inside cuGetProcAddress looking for: %s\n", symbol);
+    // fprintf(stderr, "[HOOK v1] Inside cuGetProcAddress looking for: %s\n", symbol);
 
     if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
-        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel pointer assignment!\n");
+        // fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel pointer assignment!\n");
         *pfn = (void*)cuLaunchKernel;
         return CUDA_SUCCESS;
     }
@@ -212,16 +212,16 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
 }
 
 CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
-    fprintf(stderr, "[HOOK v2] Inside cuGetProcAddress_v2 looking for: %s\n", symbol);
+    // fprintf(stderr, "[HOOK v2] Inside cuGetProcAddress_v2 looking for: %s\n", symbol);
 
     if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
-        fprintf(stderr, "[HOOK v2] Hijacking cuLaunchKernel pointer assignment!\n");
+        // fprintf(stderr, "[HOOK v2] Hijacking cuLaunchKernel pointer assignment!\n");
         *pfn = (void*)cuLaunchKernel;
         return CUDA_SUCCESS;
     }
 
     if (symbol && strcmp(symbol, "cuGetProcAddress") == 0) {
-        fprintf(stderr, "[HOOK v2] Hijacking cuGetProcAddress pointer assignment!\n");
+        // fprintf(stderr, "[HOOK v2] Hijacking cuGetProcAddress pointer assignment!\n");
         *pfn = (void*)my_cuGetProcAddress;
         return CUDA_SUCCESS;
     }
@@ -231,7 +231,7 @@ CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion,
         if(cu_handle == NULL) {
             cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
             if(cu_handle == NULL) {
-                fprintf(stderr, "[HOOK v2] WARNING: cu_handle == NULL\n");
+                // fprintf(stderr, "[HOOK v2] WARNING: cu_handle == NULL\n");
             }
         }
         real_cuGetProcAddress_v2 = (cuGetProcAddress_t)dlvsym(RTLD_NEXT, "cuGetProcAddress_v2", "RTLD_NEXT"); 
@@ -239,14 +239,14 @@ CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion,
              real_cuGetProcAddress_v2 = (cuGetProcAddress_t)real_dlsym(cu_handle, "cuGetProcAddress_v2");
         }
         if(real_cuGetProcAddress_v2 == NULL) {
-            fprintf(stderr, "[HOOK v2] WARNING: real_cuGetProcAddress_v2 == NULL\n");
+            // fprintf(stderr, "[HOOK v2] WARNING: real_cuGetProcAddress_v2 == NULL\n");
         }
     }
     return real_cuGetProcAddress(symbol, pfn, cudaVersion, flags, symbolStatus);
 }
 
 void* dlsym(void* handle, const char* symbol) {
-    fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s.\n", symbol);
+    // fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s.\n", symbol);
     // Bootstrap the real dlsym using dlvsym to avoid recursion
     if (real_dlsym == NULL) {
         real_dlsym = (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
@@ -257,7 +257,7 @@ void* dlsym(void* handle, const char* symbol) {
 
     // CRUCIAL: Intercept libcudart trying to look up cuGetProcAddress
     if (symbol && (strcmp(symbol, "cuGetProcAddress") == 0)) {
-        fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
+        // fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
         
         // Save the real function pointer from the requested handle before we fake the return
         real_cuGetProcAddress = (cuGetProcAddress_t)real_dlsym(handle, symbol);
@@ -266,7 +266,7 @@ void* dlsym(void* handle, const char* symbol) {
     }
 
     if (symbol && (strcmp(symbol, "cuGetProcAddress_v2") == 0)) {
-        fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
+        // fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
         
         // Save the real function pointer from the requested handle before we fake the return
         real_cuGetProcAddress = (cuGetProcAddress_t)real_dlsym(handle, symbol);
