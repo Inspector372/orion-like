@@ -23,32 +23,28 @@ void table_insert(uint64_t key, AtomMetaData value) {
     cudaEventCreateWithFlags(&copy_to, cudaEventDefault);
     cudaEventCreateWithFlags(&copy_from, cudaEventDefault);
 
-    fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
+    // fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
     
     for(int i = 0; i < MAP_LENGTH; i++) {
         // TODO: metadata table need to be atomic.
-        fprintf(stderr, "table_insert starting, mem_copy to host\n");
+        // fprintf(stderr, "table_insert starting, mem_copy to host\n");
         cudaMemcpyFromSymbolAsync(&metadata, atomMetaDataTable, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyDeviceToHost, metadata_pass_stream);
         cudaEventRecord(copy_to, metadata_pass_stream);
 
         cudaEventSynchronize(copy_to);
         cudaError_t err = cudaGetLastError();
-        fprintf(stderr, "1 - Error: %s\n", cudaGetErrorString(err));
         if(metadata.key == 0) {
-            fprintf(stderr, "table_insert correct, mem_copy\n");
             cudaMemcpyToSymbolAsync(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream);
             cudaEventRecord(copy_from, metadata_pass_stream);
             cudaEventSynchronize(copy_from);
             err = cudaGetLastError();
-            fprintf(stderr, "2 - Error: %s\n", cudaGetErrorString(err));
 
 
             cudaMemcpyFromSymbolAsync(&test, atomMetaDataTable, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyDeviceToHost, metadata_pass_stream);
             cudaEventRecord(copy_to, metadata_pass_stream);
             cudaEventSynchronize(copy_to);
             err = cudaGetLastError();
-            fprintf(stderr, "3 - Error: %s\n", cudaGetErrorString(err));
-            fprintf(stderr, "testing, test.key = %lx, test.kernel = %lx, test.lidx = %d, test.hidx = %d\n", test.key, test.kernel, test.lidx, test.hidx);
+            // fprintf(stderr, "testing, test.key = %lx, test.kernel = %lx, test.lidx = %d, test.hidx = %d\n", test.key, test.kernel, test.lidx, test.hidx);
 
             cudaEventDestroy(copy_to);
             cudaEventDestroy(copy_from);

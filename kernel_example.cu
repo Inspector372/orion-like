@@ -516,3 +516,96 @@ extern "C" void* test_cublas(void* arg) {
     printf("Cublas OK!\n");
     return nullptr;
 }
+
+// Kernel 1: Vector Addition C[i] = A[i] + B[i]
+__global__ void vecAddKernel(const float* A, const float* B, float* C, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        C[idx] = A[idx] + B[idx];
+    }
+}
+
+// Kernel 2: Vector Scaling C[i] = C[i] * alpha (In-place operation)
+__global__ void vecScaleKernel(float* C, float alpha, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        C[idx] *= alpha;
+    }
+}
+
+// Host checker: Verifies final result C[i] == (A[i] + B[i]) * alpha
+void chainedKernelsCheck(const float* h_A, const float* h_B, const float* h_C, float alpha, int N) {
+    for (int i = 0; i < N; i++) {
+        float expected = (h_A[i] + h_B[i]) * alpha;
+        float got = h_C[i];
+        if (fabs(expected - got) > 1e-4f * fabs(expected) + 1e-4f) {
+            fprintf(stderr, "Mismatch at index %d: expected=%f, got=%f\n", i, expected, got);
+            return;
+        }
+    }
+    fprintf(stderr, "Chained Kernels execution OK\n");
+}
+
+// C-compatible wrapper launching multiple kernels in sequence
+extern "C" void* chainedKernels_wrap(void* arg) {
+    (void)arg;
+    int N = 1024 * 16 + 100; // 17 per thread.
+    float alpha = 2.5f;  // Scaling factor
+    size_t bytes = N * sizeof(float);
+
+    float *h_A, *h_B, *h_C;
+    float *d_A, *d_B, *d_C;
+
+    // Allocate host memory
+    h_A = (float*)malloc(bytes);
+    h_B = (float*)malloc(bytes);
+    h_C = (float*)malloc(bytes);
+
+    for (int i = 0; i < N; i++) {
+        h_A[i] = (float)(rand() % 100) / 10.0f;
+        h_B[i] = (float)(rand() % 100) / 10.0f;
+    }
+
+    // Allocate device memory
+    cudaMalloc(&d_A, bytes);
+    cudaMalloc(&d_B, bytes);
+    cudaMalloc(&d_C, bytes);
+
+    // Host-to-Device Transfer
+    cudaMemcpy(d_A, h_A, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, h_B, bytes, cudaMemcpyHostToDevice);
+
+    // Grid Configuration
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+
+    // Launch Kernel 1: C = A + B
+    vecAddKernel<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, N);
+
+    // Launch Kernel 2: C = C * alpha (uses the intermediate output from Kernel 1)
+    vecScaleKernel<<<blocksPerGrid, threadsPerBlock>>>(d_C, alpha, N);
+
+    // Wait for stream completion before checking host memory
+    cudaDeviceSynchronize();
+
+    // Device-to-Host Transfer
+    cudaMemcpy(h_C, d_C, bytes, cudaMemcpyDeviceToHost);
+
+    // Verify Results
+    chainedKernelsCheck(h_A, h_B, h_C, alpha, N);
+
+    // Cleanup
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+    free(h_A);
+    free(h_B);
+    free(h_C);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA Error: %s\n", cudaGetErrorString(err));
+    }
+
+    return nullptr;
+}

@@ -1,4 +1,6 @@
 
+#define THREAD_NUM 4
+
 enum record_type {
 	RECORD_CULAUNCHKERNEL,
 	RECORD_CUDAEVENT,

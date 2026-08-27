@@ -18,8 +18,6 @@
 
 #include "hooking.h"
 
-#define THREAD_NUM 4
-
 using namespace std;
 
 bool no_hook = true;
@@ -102,7 +100,7 @@ extern "C" {
 	and wait until it gets scheduled and eventually finished.
 	this works because one thread(user) got only one thread. 
 */
-cudaError_t cudaDeviceSynchronize(void) {
+/* cudaError_t cudaDeviceSynchronize(void) {
 	
 	cudaEvent_t event;
 	cudaEventCreate(&event);
@@ -125,7 +123,7 @@ cudaError_t cudaDeviceSynchronize(void) {
 	fprintf(stderr, "thread %d, finished waiting\n", idx);
 
 	cudaEventDestroy(event);
-}
+}*/
 
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 

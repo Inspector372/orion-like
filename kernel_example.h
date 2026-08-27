@@ -20,3 +20,5 @@ extern "C" void* histKernel_wrap(void* arg);
 extern "C" void* softmaxKernel_wrap(void* arg);
 
 extern "C" void* test_cublas(void* arg);
+
+extern "C" void* chainedKernels_wrap(void* arg);
