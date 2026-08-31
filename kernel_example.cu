@@ -688,7 +688,7 @@ void chainedKernelsCheck(const float* h_A, const float* h_B, const float* h_C, f
 // C-compatible wrapper launching multiple kernels in sequence
 extern "C" void* chainedKernels_wrap(void* arg) {
     (void)arg;
-    int N = 1024 * 16 + 100; // 17 per thread.
+    int N = 1024 + 500;
     float alpha = 2.5f;  // Scaling factor
     size_t bytes = N * sizeof(float);
 

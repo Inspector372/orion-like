@@ -6,8 +6,8 @@
  */
 
 /*
-  !!!! THIS IS MODIFIED VERSION !!!!
-  Need to erase some non-used original code, but let's do that later.
+	!!!! THIS IS MODIFIED VERSION !!!!
+    Original codes of libsmctrl is on top, and I added my own configurations on bottom.
 */
 
 #include <cuda.h>
@@ -30,12 +30,11 @@ struct global_sm_control {
 	uint64_t mask;
 } __attribute__((packed));
 
-typedef struct LaunchMetaData_t {
-    uint32_t original_grid_dim;
-    uint32_t original_block_dim;
-    uint32_t atom_size;
-} LaunchMetaData_t;
 
+/*
+	AtomMetaData structure that is used on wrapper.
+	Additional fields can be added.
+*/
 typedef struct AtomMetaData_t{
 	uint64_t key;
     uint64_t kernel; 
@@ -43,25 +42,30 @@ typedef struct AtomMetaData_t{
     uint32_t hidx; 
 } AtomMetaData_t;
 
+/*
+	Static Variables.
+*/
+static uint32_t wrapper_progaddr_upper;
+static uint32_t wrapper_progaddr_lower;
+static uint8_t wrapper_register_cnt;
+static uint8_t wrapper_register_cnt_v;
 
-uint32_t nothing_ptr_upper;
-uint32_t nothing_ptr_lower;
-uint32_t wrapper_ptr_upper;
-uint32_t wrapper_ptr_lower;
-
+/*
+	External variables.
+*/
 uint32_t launch_lidx;
 uint32_t launch_hidx;
-
 uint32_t callback_mode = 0;
-uint8_t wrapper_register_cnt;
-uint8_t wrapper_register_cnt_v;
 
-uint32_t offsets[1000];
 
+/*
+	Callback function for inserting key and value into hash table.
+	Assigned before any actual kernel is run.
+*/
 static void (*hash_insert_callback)(uint64_t, AtomMetaData_t) = NULL;
 
 void assign_hash_insert(void* addr) {
-	hash_insert_callback = (void (*)(uint64_t, LaunchMetaData_t))addr;
+	hash_insert_callback = (void (*)(uint64_t, AtomMetaData_t))addr;
 }
 
 // /*** CUDA Globals Manipulation. CUDA 10.2 only ***/
@@ -507,25 +511,20 @@ abort_cuda:
 }
 
 
+/* ************************ Original libsmctrl code until here ************************ */
 
-
-/* ** Original libsmctrl code until here ** */
 
 /* 
+	Assigns this callback in every kernel launched.
+
 	if callback_mode == 0, it's wrapper assign mode.
-	consider any kernel call as wrapper call, then store PROGRAM_ADDRESS at wrapper_ptr.
+	consider any kernel call as wrapper call, then stores PROGRAM_ADDRESS/REGISTER_CNT(_V).
 
-	if callback_mode == 1, it's idle kernel assign mode. (Obsolete)
-    consider any kernel call as idle kernel call, then store PROGRAM_ADDRESS at nothing_ptr_upper and lower.
-
-    if callback_mode == 2, it's normal kernel launch mode.
-	1. every kernel call's PROGRAM_ADDRESS, CONSTANT_BUFFER_ADDR, CTA_RASTER_WIDTH, CTA_THREAD_DIMENSION_0 is catched.
-	2. look at launchMetaData[CTA_RASTER_WIDTH], calculate lidx and hidx.
-	3. Then we put this entry in gpu's hash table:
-		HT[CONSTANT_BUFFER_ADDR + 0x160] = (lidx, hidx, PROGRAM_ADDRESS)
-	4. CTA_RASTER_WIDTH is replaced to launchMetaData[CTA_RASTER_WIDTH].original_grid_dim.
-	5. CTA_THREAD_DIMENSION_0 is replaced to launchMetaData[CTA_RASTER_WIDTH].original_block_dim.
-	6. PROGRAM_ADDRESS is replaced to wrapper's program address.
+    if callback_mode == 1, it's normal kernel launch mode.
+	1. Add new entry inside gpu's hash table:
+		CONSTANT_BUFFER_ADDR + 0x160 => ((key), PROGRAM_ADDRESS, lidx, hidx)
+	2. PROGRAM_ADDRESS is replaced with PROGRAM_ADDRESS(wrapper).
+	3. if REGISTER_CNT(_V) is smaller than wrapper, it's replaced with wrapper's value.
 */
 static void false_launch_callback(void *ukwn, int domain, int cbid, const void *in_params) {
 	if (*(uint32_t*)in_params < 0x50) {
@@ -537,30 +536,26 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		return;
 	}
 
+	// PROGRAM_ADDRESS fields.
 	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
 	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
 
+	// (*buffer_start) & 0x0001ffffffffffff is actual constant buffer address, since it's 49 bits long.
 	uint64_t *buffer_start = (uint16_t*)(**((char***)in_params + 8) + 128);
+
 	uint8_t *register_cnt_v_ptr = (uint8_t*)(**((char***)in_params + 8) + 81);
 	uint8_t *register_cnt_ptr = (uint8_t*)(**((char***)in_params + 8) + 123);
-	// (*buffer_start) & 0x0001ffffffffffff is actual constant buffer address
+	
 	if (callback_mode == 0) {
-		// fetch this to wrapper ptr.
-		wrapper_ptr_upper = *upper_ptr;
-		wrapper_ptr_lower = *lower_ptr;
-		// fprintf(stderr, "wrapper register_cnt: %d\n", *register_cnt_ptr);
+		wrapper_progaddr_upper = *upper_ptr;
+		wrapper_progaddr_lower = *lower_ptr;
 		wrapper_register_cnt = *register_cnt_ptr;
 		wrapper_register_cnt_v = *register_cnt_v_ptr;
 	}
 	else if(callback_mode == 1) {
-		nothing_ptr_upper = *upper_ptr;
-		nothing_ptr_lower = *lower_ptr;
-	}
-	else if(callback_mode == 2) {
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
 		uint64_t buffer_addr = (*buffer_start) & 0x0001ffffffffffff;
 		
-		// TODO: put (buffer_addr + 0x160) => (program_addr, lidx, hidx) in hash table.
 		AtomMetaData_t metadata;
 		metadata.key = buffer_addr + 0x160;
 		metadata.kernel = program_addr;
@@ -568,14 +563,17 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		metadata.hidx = launch_hidx;
 		hash_insert_callback(buffer_addr + 0x160, metadata);
 		
-		*upper_ptr = wrapper_ptr_upper;
-		*lower_ptr = wrapper_ptr_lower;
+		*upper_ptr = wrapper_progaddr_upper;
+		*lower_ptr = wrapper_progaddr_lower;
 
-		// fprintf(stderr, "register_cnt: %d\n", *register_cnt_ptr);
 		if(*register_cnt_ptr < wrapper_register_cnt)
 			*register_cnt_ptr = wrapper_register_cnt;
 		if(*register_cnt_v_ptr < wrapper_register_cnt_v)
 			*register_cnt_v_ptr = wrapper_register_cnt_v;
+	}
+	else {
+		fprintf(stderr, "libsmctrl: Unsupported callback mode\n");
+		exit(1);
 	}
 }
 

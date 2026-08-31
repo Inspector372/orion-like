@@ -1,6 +1,6 @@
 /*
 	hooking.cpp
-	How to run: env CUDA_VISIBLE_DEVICES=0 LD_PRELOAD=./hooking.so ./threading
+	
 */
 
 #include <dlfcn.h>
@@ -70,13 +70,11 @@ void block(int idx, pthread_mutex_t** mutexes, queue<queue_record>** kqueues) {
 
 /*
 	** intercept part **
-	most of those codes are just ctrl CVed from Orion.
-	for now, only cudaLaunchKernel is intercepted.
 
-	Now I can intercept cuLaunchKernel too, thanks to 
+	Reference:
 	curtSCHED: Architecture-Independent Real-Time GPU Scheduling via Statistical Deferrable Servers by Hao Zhang, Frank Muelle(https://github.com/zhanghao5/curtSCHED/blob/main/cusched.cpp)
 
-	cuda c++ resolves names dynamically using this path:
+	cuda resolves names dynamically using this path:
 	1. dlsym() on cuGetProcAddress_v2
 	2. cuGetProcAddress_v2 on cuGetProcAddress
 	3. cuGetProcAddress on cuLaunchKernel(and a lot of other cuda driver functions)
@@ -156,9 +154,6 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	// TODO: expand them to 3 dimensions.
 	int atom_size = 1024;
 	int atom_num = ((gridDimX * blockDimX) % atom_size == 0) ? (gridDimX * blockDimX / atom_size) : (gridDimX * blockDimX / atom_size + 1);
-
-	// (Fake launch)
-	// real_cuLaunchKernel(f, 1, 1, 1, kptr_idx, 1, 1, sharedMemBytes, (CUstream)fl_stream, kernelParams, extra);
 
 	CUresult err = CUDA_SUCCESS;
 	record_cuLaunchKernel new_record;

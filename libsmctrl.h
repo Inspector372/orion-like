@@ -71,20 +71,10 @@ extern int libsmctrl_get_tpc_info(uint32_t* num_tpcs, int dev);
 extern int libsmctrl_get_tpc_info_cuda(uint32_t* num_tpcs, int cuda_dev);
 
 extern void libsmctrl_false_launch_callback();
-
 extern void assign_hash_insert(void*);
-
-
-typedef struct LaunchMetaData_t {
-    uint32_t lidx;
-    uint32_t hidx;
-}LaunchMetaData_t;
-
-#define MAX_ATOMMETADATA 1000;
 
 extern uint32_t launch_lidx;
 extern uint32_t launch_hidx;
-
 extern uint32_t callback_mode;
 
 #ifdef __cplusplus

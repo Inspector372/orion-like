@@ -21,7 +21,7 @@
 #include "wrapper.h"
 #include "libsmctrl.h"
 
-#define LEN 14232
+#define LEN 1500
 
 using namespace std;
 
@@ -182,8 +182,6 @@ void assign_launch() {
 	callback_mode = 0;
 	initial_wrapper_run();
 	callback_mode = 1;
-	initial_nothing_run();
-	callback_mode = 2;
 	*no_hook_thr = false;
 }
 
@@ -308,8 +306,8 @@ int main(int argc, char** argv) {
 			h_outs[i][j] = 0;
 		}
 		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
-		// pthread_create(&threads[i], NULL, chainedKernels_wrap, (void *)&args[i]);
-		pthread_create(&threads[i], NULL, test_cublas_prime, (void *)&args[i]);
+		pthread_create(&threads[i], NULL, chainedKernels_wrap, (void *)&args[i]);
+		// pthread_create(&threads[i], NULL, test_cublas_prime, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 

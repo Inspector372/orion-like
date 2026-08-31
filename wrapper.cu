@@ -20,6 +20,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
     AtomMetaData test;
 
     cudaEvent_t copy_to, copy_from;
+    // TODO: when debugging/profiling is done, change it with cudaEventDisableTiming for better performance.
     cudaEventCreateWithFlags(&copy_to, cudaEventDefault);
     cudaEventCreateWithFlags(&copy_from, cudaEventDefault);
 
@@ -55,27 +56,13 @@ void table_insert(uint64_t key, AtomMetaData value) {
 
 }
 
-/*__device__ AtomMetaData table_find(uint64_t key) {
-    uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
-    
-    for(int i = 0; i < MAP_LENGTH; i++) {
-        if(atomMetaDataTable[idx].key == key) {
-            atomMetaDataTable[idx].key = 0;
-            return atomMetaDataTable[idx];
-        }
-        idx = (idx + 1) % MAP_LENGTH;
-    }
-
-    AtomMetaData emptydata;
-    emptydata.key = 0;
-    
-    return emptydata;
-
-}*/
-
+/*
+    Kernel wrapper.
+    Every kernel is directed here first, then 
+*/
 __global__ void wrapper(const __grid_constant__ uint64_t argu) {
-    // AtomMetaData metadata = table_find((uint64_t)&argu);
-    if(argu == MAGIC) return;
+    if(argu == MAGIC) return; // For initial_wrapper_run().
+
     uint64_t ptr = (uint64_t)&argu;
     uint64_t idx = (ptr * 11400714819323198485ULL) % MAP_LENGTH;
 
@@ -93,10 +80,8 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu) {
     uint32_t hidx = atomMetaDataTable[idx].hidx;
 
     size_t workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    /*if(workIndex == 0) {
-        printf("lidx : %d, hidx : %d, blockDim = %d, gridDIm = %d\n", lidx, hidx, blockDim.x, gridDim.x);
-    }*/
     if (workIndex < lidx || workIndex >= hidx) return;
+
     ((func_ptr_t)kernel)();
 } 
     
@@ -109,23 +94,13 @@ void setup_metadata() {
 }
 
 
-
-__global__ void do_nothing() {
-    return;
-}
-
-/* Runs when callback_mode=0. assigns wrapper256 to wrapper_ptr. */
+/*
+    Runs only once when callback_mode = 0.
+*/
 void initial_wrapper_run() {
     uint64_t fakearg = MAGIC;
     wrapper<<<1, 1>>>(fakearg);
     (*actual_cudaDeviceSynchronize)();
 }
-
-/* Runs when callback_mode=1. assigns do_nothing to nothing_ptr_upper/lower. */
-void initial_nothing_run() {
-    do_nothing<<<1, 1>>>();
-    (*actual_cudaDeviceSynchronize)();
-}
-
 
 
