@@ -188,6 +188,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	union record_data new_record_data;
 	new_record_data.r_cuLaunchKernel = new_record;
 	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
+	pthread_mutex_unlock(table_mutex);
 
 	pthread_mutex_lock(work_queue_mutex[idx]);
 
@@ -200,7 +201,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	
 
 	pthread_mutex_unlock(work_queue_mutex[idx]);
-	pthread_mutex_unlock(table_mutex);
+	
 	fprintf(stderr, "[cuHook] block-start from %d!\n", idx);
 	block(idx, work_queue_mutex, work_queue);
 	fprintf(stderr, "[cuHook] block-end from %d!\n", idx);
