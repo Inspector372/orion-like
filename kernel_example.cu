@@ -38,6 +38,7 @@ void addCheck(int* h_A, int* h_B, int* h_out, int N) {
             return;
         }
     }
+    fprintf(stderr, "addCheck correct\n");
 }
 
 extern "C" void* addKernel_wrap(void* arg) {
@@ -672,6 +673,11 @@ __global__ void vecScaleKernel(float* C, float alpha, int N) {
     }
 }
 
+// Kernel 3: Does nothing
+__global__ void emptyKernel() {
+    return;
+}
+
 // Host checker: Verifies final result C[i] == (A[i] + B[i]) * alpha
 void chainedKernelsCheck(const float* h_A, const float* h_B, const float* h_C, float alpha, int N) {
     for (int i = 0; i < N; i++) {
@@ -687,8 +693,12 @@ void chainedKernelsCheck(const float* h_A, const float* h_B, const float* h_C, f
 
 // C-compatible wrapper launching multiple kernels in sequence
 extern "C" void* chainedKernels_wrap(void* arg) {
+    pthread_mutex_t* smutex = ((addKernel_arg*)arg)->smutex;
+    pthread_mutex_lock(smutex);
+    pthread_mutex_unlock(smutex);
+
     (void)arg;
-    int N = 1024 + 500;
+    int N = 1544;
     float alpha = 2.5f;  // Scaling factor
     size_t bytes = N * sizeof(float);
 
@@ -704,6 +714,8 @@ extern "C" void* chainedKernels_wrap(void* arg) {
         h_A[i] = (float)(rand() % 100) / 10.0f;
         h_B[i] = (float)(rand() % 100) / 10.0f;
     }
+    cudaStream_t mystream;
+    cudaStreamCreate(&mystream);
 
     // Allocate device memory
     cudaMalloc(&d_A, bytes);
@@ -719,16 +731,22 @@ extern "C" void* chainedKernels_wrap(void* arg) {
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
 
     // Launch Kernel 1: C = A + B
+    fprintf(stderr, "Kernel - Launch First\n");
     vecAddKernel<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, N);
 
     // Launch Kernel 2: C = C * alpha (uses the intermediate output from Kernel 1)
+    fprintf(stderr, "Kernel - Launch Second\n");
+    emptyKernel<<<blocksPerGrid, threadsPerBlock>>>();
     vecScaleKernel<<<blocksPerGrid, threadsPerBlock>>>(d_C, alpha, N);
 
     // Wait for stream completion before checking host memory
+    fprintf(stderr, "Synchronize - In\n");
     cudaDeviceSynchronize();
+    fprintf(stderr, "Synchronize Pass\n");
 
     // Device-to-Host Transfer
     cudaMemcpy(h_C, d_C, bytes, cudaMemcpyDeviceToHost);
+    fprintf(stderr, "Memcpy Pass\n");
 
     // Verify Results
     chainedKernelsCheck(h_A, h_B, h_C, alpha, N);
@@ -740,6 +758,8 @@ extern "C" void* chainedKernels_wrap(void* arg) {
     free(h_A);
     free(h_B);
     free(h_C);
+
+    cudaStreamDestroy(mystream);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {

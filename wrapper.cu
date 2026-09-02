@@ -21,31 +21,36 @@ void table_insert(uint64_t key, AtomMetaData value) {
 
     cudaEvent_t copy_to, copy_from;
     // TODO: when debugging/profiling is done, change it with cudaEventDisableTiming for better performance.
-    cudaEventCreateWithFlags(&copy_to, cudaEventDefault);
-    cudaEventCreateWithFlags(&copy_from, cudaEventDefault);
+    cudaEventCreateWithFlags(&copy_to, cudaEventBlockingSync);
+    cudaEventCreateWithFlags(&copy_from, cudaEventBlockingSync);
 
-    // fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
+    fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
     
     for(int i = 0; i < MAP_LENGTH; i++) {
         // TODO: metadata table need to be atomic.
-        // fprintf(stderr, "table_insert starting, mem_copy to host\n");
+        fprintf(stderr, "table_insert starting, mem_copy to host 1\n");
         cudaMemcpyFromSymbolAsync(&metadata, atomMetaDataTable, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyDeviceToHost, metadata_pass_stream);
+        fprintf(stderr, "table_insert starting, mem_copy to host 2\n");
         cudaEventRecord(copy_to, metadata_pass_stream);
 
+        fprintf(stderr, "Synchronizing to copy_to...\n");
         cudaEventSynchronize(copy_to);
-        cudaError_t err = cudaGetLastError();
+        // cudaError_t err = cudaGetLastError();
         if(metadata.key == 0) {
             cudaMemcpyToSymbolAsync(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream);
             cudaEventRecord(copy_from, metadata_pass_stream);
+            fprintf(stderr, "Synchronizing to copy_from...\n");
             cudaEventSynchronize(copy_from);
-            err = cudaGetLastError();
+            // err = cudaGetLastError();
 
 
+            /*
             cudaMemcpyFromSymbolAsync(&test, atomMetaDataTable, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyDeviceToHost, metadata_pass_stream);
             cudaEventRecord(copy_to, metadata_pass_stream);
             cudaEventSynchronize(copy_to);
             err = cudaGetLastError();
-            // fprintf(stderr, "testing, test.key = %lx, test.kernel = %lx, test.lidx = %d, test.hidx = %d\n", test.key, test.kernel, test.lidx, test.hidx);
+            fprintf(stderr, "testing, test.key = %lx, test.kernel = %lx, test.lidx = %d, test.hidx = %d\n", test.key, test.kernel, test.lidx, test.hidx);
+            */
 
             cudaEventDestroy(copy_to);
             cudaEventDestroy(copy_from);
@@ -58,7 +63,9 @@ void table_insert(uint64_t key, AtomMetaData value) {
 
 /*
     Kernel wrapper.
-    Every kernel is directed here first, then 
+    
+    
+
 */
 __global__ void wrapper(const __grid_constant__ uint64_t argu) {
     if(argu == MAGIC) return; // For initial_wrapper_run().

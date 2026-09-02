@@ -27,6 +27,10 @@ queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 cudaStream_t fl_stream;
 
+pthread_mutex_t* table_mutex;
+
+cudaError_t (*real_cudaLaunchKernel)(const void*, dim3, dim3, void**, size_t, cudaStream_t) = NULL;
+
 CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
 
 typedef CUresult (*cuGetProcAddress_t)(const char*, void**, int, unsigned int, void*);
@@ -123,6 +127,25 @@ extern "C" {
 	cudaEventDestroy(event);
 }*/
 
+cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream) {
+	if (real_cudaLaunchKernel == NULL) {
+        real_cudaLaunchKernel = (cudaError_t (*)(const void*, dim3, dim3, void**, size_t, cudaStream_t))real_dlsym(RTLD_NEXT, "cudaLaunchKernel");
+        if(real_cudaLaunchKernel == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cudaLaunchKernel == NULL\n");
+        }
+    }
+	if(no_hook) {
+		return real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
+	}
+	int idx = get_idx();
+	fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
+	pthread_mutex_lock(table_mutex);
+	cudaError_t err = real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
+	pthread_mutex_unlock(table_mutex);
+	fprintf(stderr, "[cudaHook] launch finished from %d!\n", idx);
+	return err;
+}
+
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
                         unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
@@ -183,7 +206,6 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 
     return err;
 
-    // return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
 }
 
 CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {

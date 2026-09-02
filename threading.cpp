@@ -45,11 +45,6 @@ pthread_mutex_t** work_queue_mutex;
 // but need to wrap functions with mutex, or remove it later.
 pthread_mutex_t start_mutex;
 
-// This is for global variable kernel_ptrs_index in hooking.cpp.
-// we may need this index in threading.cpp,
-// but for now it has no use.
-pthread_mutex_t* kernel_ptrs_mutex_thr;
-
 // This is used for insertion of atomMetaDataTable.
 // only one thread can access this table, otherwise it will mess up things.
 pthread_mutex_t table_mutex;
@@ -74,9 +69,9 @@ typedef struct scheduler_arg {
 
 
 void hash_insert(uint64_t key, AtomMetaData value) {
-	pthread_mutex_lock(&table_mutex);
+	// pthread_mutex_lock(&table_mutex);
 	table_insert(key, value);
-	pthread_mutex_unlock(&table_mutex);
+	// pthread_mutex_unlock(&table_mutex);
 }
 
 /* imported from Orion, RTLD_DEFAULT -> handle */
@@ -117,21 +112,22 @@ void variables_setup() {
 	*mutex_ptr = (pthread_mutex_t**)malloc(THREAD_NUM * sizeof(pthread_mutex_t*));
 	work_queue_mutex = *mutex_ptr;
 	for (int i = 0; i < THREAD_NUM; i++) {
-		(*mutex_ptr)[i] = new pthread_mutex_t();
+		work_queue_mutex[i] = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
+		pthread_mutex_init(work_queue_mutex[i], NULL);
 	}
 
-	// 3. mutex for global variable kernel_ptrs_index.
-	kernel_ptrs_mutex_thr = (pthread_mutex_t*)dlsym(klib, "kernel_ptrs_mutex");
+	// 3. mutex for table.
+	pthread_mutex_t** table_mutex_ptr = (pthread_mutex_t**)dlsym(klib, "table_mutex");
+	*table_mutex_ptr = &table_mutex;
+	pthread_mutex_init(&table_mutex, NULL);
+
 
 	// 4. no-hook switch.
 	no_hook_thr = (bool*)dlsym(klib, "no_hook");
 
-	// 6. Setup metadata table.
+	// 5. Setup metadata table.
 	setup_metadata();
-
-	// 7. mutex initialization.
-	// TODO: I forgot initialization for other mutexes. fix this too.
-	pthread_mutex_init(&table_mutex, NULL);
+	
 
 	// for now, those are just all. now we can use those variables in hooking.cpp.
 }
@@ -205,8 +201,8 @@ void* scheduler(void* scarg) {
 			fprintf(stderr, "scheduler return - expected %d jobs completed\n", job_count);
 			return nullptr;
 		}
-		else if (time(NULL) - start_os > 25) {
-			fprintf(stderr, "scheduler return - total %d jobs completed, timeout of 25 seconds\n", job_count);
+		else if (time(NULL) - start_os > 10) {
+			fprintf(stderr, "scheduler return - total %d jobs completed, timeout of 10 seconds\n", job_count);
 			return nullptr;
 		}
 		// pop one from queue, and assign.
@@ -240,9 +236,6 @@ void* scheduler(void* scarg) {
 				default:
 				fprintf(stderr, "Error: unknown record type\n");
 			}
-
-			
-    		
 
 		}
 		pthread_mutex_unlock(work_queue_mutex[turn]);
