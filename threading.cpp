@@ -69,9 +69,9 @@ typedef struct scheduler_arg {
 
 
 void hash_insert(uint64_t key, AtomMetaData value) {
-	// pthread_mutex_lock(&table_mutex);
+	pthread_mutex_lock(&table_mutex);
 	table_insert(key, value);
-	// pthread_mutex_unlock(&table_mutex);
+	pthread_mutex_unlock(&table_mutex);
 }
 
 /* imported from Orion, RTLD_DEFAULT -> handle */

@@ -698,7 +698,7 @@ extern "C" void* chainedKernels_wrap(void* arg) {
     pthread_mutex_unlock(smutex);
 
     (void)arg;
-    int N = 1544;
+    int N = 2232;
     float alpha = 2.5f;  // Scaling factor
     size_t bytes = N * sizeof(float);
 

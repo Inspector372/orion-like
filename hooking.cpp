@@ -141,7 +141,7 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
 	pthread_mutex_lock(table_mutex);
 	cudaError_t err = real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
-	pthread_mutex_unlock(table_mutex);
+	
 	fprintf(stderr, "[cudaHook] launch finished from %d!\n", idx);
 	return err;
 }
@@ -200,6 +200,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	
 
 	pthread_mutex_unlock(work_queue_mutex[idx]);
+	pthread_mutex_unlock(table_mutex);
 	fprintf(stderr, "[cuHook] block-start from %d!\n", idx);
 	block(idx, work_queue_mutex, work_queue);
 	fprintf(stderr, "[cuHook] block-end from %d!\n", idx);
