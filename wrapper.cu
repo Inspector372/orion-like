@@ -17,7 +17,6 @@ __device__ AtomMetaData atomMetaDataTable[MAP_LENGTH];
 void table_insert(uint64_t key, AtomMetaData value) {
     uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
     AtomMetaData metadata;
-    AtomMetaData test;
 
     cudaEvent_t copy_to, copy_from;
     // TODO: when debugging/profiling is done, change it with cudaEventDisableTiming for better performance.
@@ -27,7 +26,6 @@ void table_insert(uint64_t key, AtomMetaData value) {
     fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
     
     for(int i = 0; i < MAP_LENGTH; i++) {
-        // TODO: metadata table need to be atomic.
         fprintf(stderr, "table_insert starting, mem_copy to host 1\n");
         cudaMemcpyFromSymbolAsync(&metadata, atomMetaDataTable, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyDeviceToHost, metadata_pass_stream);
         fprintf(stderr, "table_insert starting, mem_copy to host 2\n");
@@ -35,13 +33,11 @@ void table_insert(uint64_t key, AtomMetaData value) {
 
         fprintf(stderr, "Synchronizing to copy_to...\n");
         cudaEventSynchronize(copy_to);
-        // cudaError_t err = cudaGetLastError();
         if(metadata.key == 0) {
             cudaMemcpyToSymbolAsync(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream);
             cudaEventRecord(copy_from, metadata_pass_stream);
             fprintf(stderr, "Synchronizing to copy_from...\n");
             cudaEventSynchronize(copy_from);
-            // err = cudaGetLastError();
 
 
             /*

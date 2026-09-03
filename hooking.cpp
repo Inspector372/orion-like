@@ -165,6 +165,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 		fprintf(stderr, "[cuHook] no-hook launch of %p\n", f);
 		return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
 	}
+	pthread_mutex_unlock(table_mutex);
 
 	fprintf(stderr, "[cuHook] caught call from someone!\n");
 	int idx = get_idx();
@@ -188,7 +189,6 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	union record_data new_record_data;
 	new_record_data.r_cuLaunchKernel = new_record;
 	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
-	pthread_mutex_unlock(table_mutex);
 
 	pthread_mutex_lock(work_queue_mutex[idx]);
 

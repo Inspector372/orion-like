@@ -208,8 +208,6 @@ void* scheduler(void* scarg) {
 		// pop one from queue, and assign.
 		pthread_mutex_lock(work_queue_mutex[turn]);
 		if(!(*work_queue[turn]).empty()) {
-			// this routine should be something like assign_job(),
-			// and changed when we intercept other cuda calls.
 			queue_record qrecord = (*work_queue[turn]).front();
 
 			switch(qrecord.type) {
@@ -252,9 +250,6 @@ int main(int argc, char** argv) {
 	pthread_t threads[THREAD_NUM + 1];
 
 	// data structure used for N client threads.
-	int* h_As[THREAD_NUM];
-	int* h_Bs[THREAD_NUM];
-	int* h_outs[THREAD_NUM];
 	addKernel_arg args[THREAD_NUM];
 
 	size_t scheduler_idx = THREAD_NUM;
@@ -290,17 +285,8 @@ int main(int argc, char** argv) {
 	// each thread gets arguments.
 	printf("creating clients...\n");
 	for(int i = 0; i < THREAD_NUM; i++) {
-		h_As[i] = (int*)malloc(sizeof(int) * LEN);
-		h_Bs[i] = (int*)malloc(sizeof(int) * LEN);
-		h_outs[i] = (int*)malloc(sizeof(int) * LEN);
-		for(int j = 0; j < LEN; j++) {
-			h_As[i][j] = j;
-			h_Bs[i][j] = j;
-			h_outs[i][j] = 0;
-		}
-		args[i] = {LEN, h_As[i], h_Bs[i], h_outs[i], &start_mutex};
+		args[i] = {&start_mutex};
 		pthread_create(&threads[i], NULL, chainedKernels_wrap, (void *)&args[i]);
-		// pthread_create(&threads[i], NULL, test_cublas_prime, (void *)&args[i]);
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 
@@ -328,12 +314,5 @@ int main(int argc, char** argv) {
 	}
 	printf("launch complete.\n");
 
-
-	// cleanup.
-	for(int i = 0; i < THREAD_NUM; i++) {
-		free(h_As[i]);
-		free(h_Bs[i]);
-		free(h_outs[i]);
-	}
     return 0;
 }
