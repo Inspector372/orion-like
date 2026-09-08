@@ -1,6 +1,8 @@
 /*
 	threading.cpp
 
+	Spawns scheduler(OS) and client(tanent) threads.
+	main branch of the code.
 */
 
 #include <stdio.h>
@@ -10,28 +12,26 @@
 #include <queue>
 #include <cstring>
 #include <time.h>
+#include <assert.h>
 
 #include <cuda_runtime.h>
 #include <cuda.h>
 
-#include <assert.h>
-
-#include "kernel_example.h"
 #include "hooking.h"
 #include "wrapper.h"
 #include "libsmctrl.h"
 
-#define LEN 1500
-
 using namespace std;
+
+typedef struct arg_t {
+    pthread_mutex_t* smutex;
+    void* func;  
+} arg_t;
 
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 
-CUresult (*actual_cuFuncGetParamInfo)(CUfunction, size_t, size_t*, size_t*);
 
-cudaError_t (*actual_cudaDeviceSynchronize)(void);
-
-
+// hooking.cpp
 void* klib;
 
 
@@ -74,22 +74,29 @@ void hash_insert(uint64_t key, AtomMetaData value) {
 	pthread_mutex_unlock(&table_mutex);
 }
 
-/* imported from Orion, RTLD_DEFAULT -> handle */
+/* 
+	Wrapper for thread structure.
+	func should be void func(void).
+*/
+void* thread_wrapper(void* arg) {
+	pthread_mutex_t* smutex = ((arg_t*)arg)->smutex;
+	void* func = ((arg_t*)arg)->func;
+    pthread_mutex_lock(smutex);
+    pthread_mutex_unlock(smutex);
+	(void (*)(void))func();
+}
+
+/*
+	imported from Orion.
+	When handling libcuda(not libcudart), RTLD_DEFAULT didnt work,
+	so we open it directly and load it into handle.
+*/
 void register_functions() {
 	void* handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
 
     // for kernel
 	*(void **)(&actual_cuLaunchKernel) = dlsym(handle, "cuLaunchKernel");
 	assert(actual_cuLaunchKernel != NULL);
-
-
-	// for inspections, we need to load those functions too.
-	*(void **)(&actual_cuFuncGetParamInfo) = dlsym (handle, "cuFuncGetParamInfo");
-	assert (actual_cuFuncGetParamInfo != NULL);
-
-	*(void **)(&actual_cudaDeviceSynchronize) = dlsym (RTLD_NEXT, "cudaDeviceSynchronize");
-	assert (actual_cudaDeviceSynchronize != NULL);
-
 
 	// assign hash_insert_callback of libsmctrl.
 	assign_hash_insert((void*)hash_insert);

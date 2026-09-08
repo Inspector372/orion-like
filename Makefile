@@ -8,9 +8,6 @@ libsmctrl.a:
 hooking.so:
 	g++ -fPIC hooking.cpp -o hooking.so -shared -ldl
 
-kernel_example.o: 
-	nvcc -cudart=shared -std=c++11 -c -o kernel_example.o kernel_example.cu -lcublasLt
-
 # -G option is important, this ignores some compiler optimization,
 # which leads to failure of kernel-inside-kernel launch.
 wrapper.o: 
