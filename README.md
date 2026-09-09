@@ -179,3 +179,32 @@ fill kernels remain CUDA implementation-dependent.
 Queueing of cudaMemset and Device-to-Device memcpy, and other implicit kernel calls
 cuDNN test
 pytorch test
+
+## cuBLASLt workloads
+
+- `cublaslt_matmul`: square FP32 GEMM, C = A * B.
+- `cublaslt_chained`: two dependent square FP32 GEMMs, C = A * B,
+  then D = C * A. The intermediate remains on the GPU.
+
+Both use column-major matrices, per-client handles and workspace, heuristic
+algorithm selection, and full CPU reference verification on every iteration.
+FP32 pedantic computation avoids automatic reduced-precision input conversion.
+There are no explicit memset calls in these workloads; library internals may
+still submit auxiliary work.
+
+```sh
+make hooking.so threading
+LD_PRELOAD=./hooking.so ./threading cublaslt_matmul:64:10
+LD_PRELOAD=./hooking.so ./threading cublaslt_chained:64:10
+```
+
+Size is the square matrix dimension (1..1024, default 64). Iterations repeats
+the operation or pair; work is unused and seed controls inputs. Device-wide
+synchronization after each GEMM establishes completion across remapped streams,
+so these test correctness rather than asynchronous overlap.
+
+These are library compatibility tests: cuBLASLt selects its own launch geometry
+and may launch multiple internal kernels. The existing 1D atomization and
+injected-entry design may not support those kernels. A successful API submission
+alone does not establish scheduler compatibility. The Makefile links
+`-lcublasLt`; CUDA compilation and GPU execution must be validated locally.
