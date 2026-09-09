@@ -173,3 +173,10 @@ launches. The seed selects the changing byte patterns. Device synchronization
 between phases preserves dependencies across scheduler-remapped streams; this
 is a correctness stress test, not an asynchronous overlap benchmark. Internal
 fill kernels remain CUDA implementation-dependent.
+
+## TODO
+
+Launch of multiple dimensioned kernels
+Queueing of cudaMemset and Device-to-Device memcpy, and other implicit kernel calls
+cuDNN test
+pytorch test

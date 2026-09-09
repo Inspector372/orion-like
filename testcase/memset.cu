@@ -1,6 +1,8 @@
 #include "common.cuh"
 #include <algorithm>
 
+
+// This test case tests handling implicit kernel call done by cudaMemset() and cudaMemsetAsync().
 // Each round fills data, then runs two dependent kernels. Explicit device
 // synchronization bridges the original stream and scheduler-remapped streams.
 // This tests internal fill launches and correctness, not asynchronous overlap.
