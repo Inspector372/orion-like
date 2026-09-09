@@ -21,11 +21,13 @@ wrapper.o:
 testcase/%.o: testcase/%.cu testcase/testcase.h testcase/common.cuh
 	nvcc -arch=sm_70 -c $< -o $@
 
-registry.o: registry.cpp testcase/testcase.h
+testcase/registry.o: testcase/registry.cpp testcase/testcase.h
 	g++ -std=c++11 -c $< -o $@
 
-threading: $(TEST_OBJECTS)
-	nvcc -G -g -Xcompiler -pthread threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o -o threading -ldl -lcudart -lcuda -L/usr/local/cuda-12.8/lib64/stubs
+testcase/cublaslt_matmul.o testcase/cublaslt_chained.o: testcase/cublaslt_common.cuh
+
+threading: threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o
+	nvcc -G -g -Xcompiler -pthread threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o -o threading -ldl -lcudart -lcuda -lcublasLt -L/usr/local/cuda-12.8/lib64/stubs
 
 clean:
 	rm -f libsmctrl.o libsmctrl.a hooking.so wrapper.o threading.o threading testcase/*.o

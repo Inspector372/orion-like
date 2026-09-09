@@ -20,6 +20,8 @@ Result matmul(const Config&);
 Result compute(const Config&);
 Result chained(const Config&);
 Result memset(const Config&);
+Result cublaslt_matmul(const Config&);
+Result cublaslt_chained(const Config&);
 const Entry* find(const std::string& name);
 void list();
 // name[:size[:iterations[:work[:seed]]]]; throws on invalid input.

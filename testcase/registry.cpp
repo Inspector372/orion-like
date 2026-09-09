@@ -8,7 +8,9 @@ namespace testcase {
 static const Entry entries[] = {
     {"coverage", coverage, 4097}, {"vector_add", vector_add, 65536},
     {"matmul", matmul, 64}, {"compute", compute, 4096},
-    {"chained", chained, 4097}, {"memset", memset, 4097}
+    {"chained", chained, 4097}, {"memset", memset, 4097},
+    {"cublaslt_matmul", cublaslt_matmul, 64},
+    {"cublaslt_chained", cublaslt_chained, 64}
 };
 const Entry* find(const std::string& name) {
     for (const auto& e : entries) if (name == e.name) return &e;
@@ -37,7 +39,7 @@ Selection parse(const std::string& spec) {
         values[i-1] = std::stoull(parts[i]);
     }
     // Bound sizes to keep the scheduler's signed 1D atom arithmetic valid.
-    const auto max_size = parts[0] == "matmul" ? 1024ull : (1ull << 26);
+    const auto max_size = (parts[0] == "matmul" || parts[0] == "cublaslt_matmul" || parts[0] == "cublaslt_chained") ? 1024ull : (1ull << 26);
     if (!values[0] || values[0] > max_size || !values[1] || values[1] > 1000000 ||
         !values[2] || values[2] > 1000000 || values[3] > UINT32_MAX)
         throw std::invalid_argument("Parameter outside supported range: " + spec);
