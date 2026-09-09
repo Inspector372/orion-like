@@ -1,4 +1,5 @@
 #include "common.cuh"
+#include <limits>
 namespace {
 __global__ void multiply(const float* a, const float* b, float* out, std::size_t m) {
     std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -11,12 +12,13 @@ __global__ void multiply(const float* a, const float* b, float* out, std::size_t
 }
 testcase::Result testcase::matmul(const Config& c) {
     const auto n = c.size * c.size, bytes = n * sizeof(float);
-    std::vector<float> a(n), b(n), out(n);
+    std::vector<float> a(n), b(n), out(n, std::numeric_limits<float>::quiet_NaN());
     for (std::size_t i = 0; i < n; ++i) { a[i] = input(i, c.seed); b[i] = input(i, c.seed + 7); }
     Buffer<float> da(n), db(n), dc(n);
     check(cudaMemcpy(da.ptr, a.data(), bytes, cudaMemcpyHostToDevice));
     check(cudaMemcpy(db.ptr, b.data(), bytes, cudaMemcpyHostToDevice));
-    check(cudaMemset(dc.ptr, 0xff, bytes));
+    // Seed output with NaNs so missing writes fail verification, without a memset.
+    check(cudaMemcpy(dc.ptr, out.data(), bytes, cudaMemcpyHostToDevice));
     for (int r = 0; r < c.iterations; ++r) {
         multiply<<<blocks(n), 256>>>(da.ptr, db.ptr, dc.ptr, c.size);
         check(cudaGetLastError());
