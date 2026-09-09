@@ -153,3 +153,23 @@ their registered function rather than define `main()`.
 
 Exceptions are caught by `thread_wrapper()`, and the common device buffer
 releases allocations during exception unwinding.
+
+## Memset stress workload
+
+The ordinary workloads initialize device outputs with host-to-device copies.
+The dedicated `memset` workload alternates `cudaMemset` and
+`cudaMemsetAsync`, each followed by two dependent kernels. It verifies every
+round's values and execution counts.
+
+```sh
+make hooking.so threading
+LD_PRELOAD=./hooking.so ./threading memset:4097:1:100
+```
+
+For this workload, `size` is the number of unsigned elements, `iterations` is
+the number of batches, and `work` is the number of fill/kernel rounds per batch.
+The default is 256 rounds. Each round performs one fill and two explicit kernel
+launches. The seed selects the changing byte patterns. Device synchronization
+between phases preserves dependencies across scheduler-remapped streams; this
+is a correctness stress test, not an asynchronous overlap benchmark. Internal
+fill kernels remain CUDA implementation-dependent.

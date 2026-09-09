@@ -8,7 +8,7 @@ namespace testcase {
 static const Entry entries[] = {
     {"coverage", coverage, 4097}, {"vector_add", vector_add, 65536},
     {"matmul", matmul, 64}, {"compute", compute, 4096},
-    {"chained", chained, 4097}
+    {"chained", chained, 4097}, {"memset", memset, 4097}
 };
 const Entry* find(const std::string& name) {
     for (const auto& e : entries) if (name == e.name) return &e;

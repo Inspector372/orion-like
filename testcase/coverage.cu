@@ -7,13 +7,13 @@ __global__ void visit(unsigned* out, std::size_t n) {
 }
 testcase::Result testcase::coverage(const Config& c) {
     Buffer<unsigned> d(c.size);
-    check(cudaMemset(d.ptr, 0, c.size * sizeof(unsigned)));
+    std::vector<unsigned> h(c.size, 0u);
+    check(cudaMemcpy(d.ptr, h.data(), c.size * sizeof(unsigned), cudaMemcpyHostToDevice));
     for (int r = 0; r < c.iterations; ++r) {
         visit<<<blocks(c.size), 256>>>(d.ptr, c.size);
         check(cudaGetLastError());
     }
     finish();
-    std::vector<unsigned> h(c.size);
     check(cudaMemcpy(h.data(), d.ptr, c.size * sizeof(unsigned), cudaMemcpyDeviceToHost));
     bool ok = true;
     for (auto value : h) ok &= value == static_cast<unsigned>(c.iterations);

@@ -7,7 +7,7 @@ namespace testcase {
 struct Config {
     std::size_t size = 4097; // Elements; square matrix dimension for matmul.
     int iterations = 1;     // Number of kernel/chain repetitions.
-    int work = 256;         // Integer recurrence steps for compute.
+    int work = 256;         // Recurrence steps for compute; fill/kernel pairs per iteration for memset.
     std::uint32_t seed = 1;
 };
 struct Result { bool passed; std::string message; };
@@ -19,6 +19,7 @@ Result vector_add(const Config&);
 Result matmul(const Config&);
 Result compute(const Config&);
 Result chained(const Config&);
+Result memset(const Config&);
 const Entry* find(const std::string& name);
 void list();
 // name[:size[:iterations[:work[:seed]]]]; throws on invalid input.

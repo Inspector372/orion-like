@@ -11,7 +11,8 @@ __global__ void transform(unsigned* out, std::size_t n) {
 }
 testcase::Result testcase::chained(const Config& c) {
     Buffer<unsigned> d(c.size);
-    check(cudaMemset(d.ptr, 0, c.size * sizeof(unsigned)));
+    std::vector<unsigned> out(c.size, 0u);
+    check(cudaMemcpy(d.ptr, out.data(), c.size * sizeof(unsigned), cudaMemcpyHostToDevice));
     initialize<<<blocks(c.size), 256>>>(d.ptr, c.size, c.seed);
     check(cudaGetLastError());
     for (int r = 0; r < c.iterations; ++r) {
@@ -19,7 +20,6 @@ testcase::Result testcase::chained(const Config& c) {
         check(cudaGetLastError());
     }
     finish();
-    std::vector<unsigned> out(c.size);
     check(cudaMemcpy(out.data(), d.ptr, c.size * sizeof(unsigned), cudaMemcpyDeviceToHost));
     bool ok = true;
     for (std::size_t i = 0; i < c.size; ++i) {

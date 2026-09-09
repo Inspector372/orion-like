@@ -11,13 +11,13 @@ __global__ void calculate(unsigned* out, std::size_t n, int work, unsigned seed)
 }
 testcase::Result testcase::compute(const Config& c) {
     Buffer<unsigned> d(c.size);
-    check(cudaMemset(d.ptr, 0, c.size * sizeof(unsigned)));
+    std::vector<unsigned> out(c.size, 0u);
+    check(cudaMemcpy(d.ptr, out.data(), c.size * sizeof(unsigned), cudaMemcpyHostToDevice));
     for (int r = 0; r < c.iterations; ++r) {
         calculate<<<blocks(c.size), 256>>>(d.ptr, c.size, c.work, c.seed);
         check(cudaGetLastError());
     }
     finish();
-    std::vector<unsigned> out(c.size);
     check(cudaMemcpy(out.data(), d.ptr, c.size * sizeof(unsigned), cudaMemcpyDeviceToHost));
     bool ok = true;
     for (std::size_t i = 0; i < c.size; ++i) ok &= out[i] == recurrence(static_cast<unsigned>(i) + c.seed, c.work);
