@@ -13,6 +13,10 @@
 #include <cstring>
 #include <time.h>
 #include <assert.h>
+#include <atomic>
+#include <cstdlib>
+#include <exception>
+#include "testcase/testcase.h"
 
 #include <cuda_runtime.h>
 #include <cuda.h>
@@ -23,10 +27,12 @@
 
 using namespace std;
 
-typedef struct arg_t {
-    pthread_mutex_t* smutex;
-    void* func;  
-} arg_t;
+struct arg_t {
+    testcase::Selection selection;
+    testcase::Result result;
+};
+std::atomic<int> clients_done{0};
+cudaError_t (*actual_cudaDeviceSynchronize)(void) = nullptr;
 
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 
@@ -40,10 +46,10 @@ void* klib;
 queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 
-// This is for letting threads stall before all setups are done.
-// it's possible to do this because this is a toy experiment,
-// but need to wrap functions with mutex, or remove it later.
-pthread_mutex_t start_mutex;
+// Clients wait until registration and scheduler setup are complete.
+pthread_mutex_t start_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t start_cond = PTHREAD_COND_INITIALIZER;
+bool ready = false;
 
 // This is used for insertion of atomMetaDataTable.
 // only one thread can access this table, otherwise it will mess up things.
@@ -61,7 +67,7 @@ cudaStream_t* fake_launch_stream;
 // Stream for metadata passing.
 cudaStream_t metadata_pass_stream;
 
-time_t start_os;
+
 
 typedef struct scheduler_arg {
 	int PLACEHOLDER;
@@ -74,16 +80,21 @@ void hash_insert(uint64_t key, AtomMetaData value) {
 	pthread_mutex_unlock(&table_mutex);
 }
 
-/* 
-	Wrapper for thread structure.
-	func should be void func(void).
-*/
+// The harness owns startup and completion; workloads contain ordinary CUDA code.
 void* thread_wrapper(void* arg) {
-	pthread_mutex_t* smutex = ((arg_t*)arg)->smutex;
-	void* func = ((arg_t*)arg)->func;
-    pthread_mutex_lock(smutex);
-    pthread_mutex_unlock(smutex);
-	(void (*)(void))func();
+    auto* args = static_cast<arg_t*>(arg);
+    pthread_mutex_lock(&start_mutex);
+    while (!ready) pthread_cond_wait(&start_cond, &start_mutex);
+    pthread_mutex_unlock(&start_mutex);
+    try {
+        args->result = args->selection.entry->run(args->selection.config);
+    } catch (const std::exception& e) {
+        args->result = {false, e.what()};
+    } catch (...) {
+        args->result = {false, "Unknown workload exception"};
+    }
+    ++clients_done;
+    return nullptr;
 }
 
 /*
@@ -98,7 +109,10 @@ void register_functions() {
 	*(void **)(&actual_cuLaunchKernel) = dlsym(handle, "cuLaunchKernel");
 	assert(actual_cuLaunchKernel != NULL);
 
-	// assign hash_insert_callback of libsmctrl.
+	*(void**)(&actual_cudaDeviceSynchronize) = dlsym(RTLD_DEFAULT, "cudaDeviceSynchronize");
+    assert(actual_cudaDeviceSynchronize != nullptr);
+
+    // assign hash_insert_callback of libsmctrl.
 	assign_hash_insert((void*)hash_insert);
 
 }
@@ -159,10 +173,10 @@ void create_streams() {
 		cudaStreamCreateWithPriority(sched_streams[i], cudaStreamNonBlocking, *lp);
 	}
 	sched_streams[THREAD_NUM - 1] = (cudaStream_t*)malloc(sizeof(cudaStream_t));
-	if(lp == hp)
+	if(*lp == *hp)
 		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp);
 	else
-		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp - 1);
+		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp + 1);
 
 	cudaStream_t* fake_launch_stream_ptr = (cudaStream_t*)dlsym(klib, "fl_stream");
 	cudaStreamCreateWithPriority(fake_launch_stream_ptr, cudaStreamNonBlocking, *hp);
@@ -196,22 +210,25 @@ void assign_launch() {
 */
 void* scheduler(void* scarg) {
 	int turn = 0;
-	int job_count = 0;
-	int total_job = THREAD_NUM * 10000; // currently only 1 kernel is launched per thread.
-
+	(void)scarg;
+    pthread_mutex_lock(&start_mutex);
+    ready = true;
+    pthread_cond_broadcast(&start_cond);
     pthread_mutex_unlock(&start_mutex);
-	fprintf(stderr, "scheduler init...\n");
+    fprintf(stderr, "scheduler init...\n");
 
-	while(1) {
-		// return after (JOB_NUM) number of jobs.
-		if (job_count == total_job) {
-			fprintf(stderr, "scheduler return - expected %d jobs completed\n", job_count);
-			return nullptr;
-		}
-		else if (time(NULL) - start_os > 10) {
-			fprintf(stderr, "scheduler return - total %d jobs completed, timeout of 10 seconds\n", job_count);
-			return nullptr;
-		}
+    while (true) {
+        // Clients synchronize before returning. Once every producer has finished,
+        // drain all records before stopping. Use an external timeout for hangs.
+        if (clients_done.load() == THREAD_NUM) {
+            bool empty = true;
+            for (int i = 0; i < THREAD_NUM; ++i) {
+                pthread_mutex_lock(work_queue_mutex[i]);
+                empty &= work_queue[i]->empty();
+                pthread_mutex_unlock(work_queue_mutex[i]);
+            }
+            if (empty) return nullptr;
+        }
 		// pop one from queue, and assign.
 		pthread_mutex_lock(work_queue_mutex[turn]);
 		if(!(*work_queue[turn]).empty()) {
@@ -223,23 +240,31 @@ void* scheduler(void* scarg) {
 					// TODO: how to pass status?
 					launch_lidx = record.lidx;
 					launch_hidx = record.hidx;
-					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+					CUresult launch_status = (*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+                    if (launch_status != CUDA_SUCCESS) {
+                        fprintf(stderr, "Scheduler launch failed: %d\n", int(launch_status));
+                        std::exit(EXIT_FAILURE);
+                    }
 					(*work_queue[turn]).pop();
 					fprintf(stderr, "scheduler finish assigning job of #%d\n", turn);
-					job_count++;
+
 				}
 				break;
 
 				case RECORD_CUDAEVENT: {
 					record_cudaEvent record_event = qrecord.data.r_cudaEvent;
 					// fprintf(stderr, "event recorded for #%d\n", turn);
-					cudaEventRecord(record_event.event, *sched_streams[turn]);
+					if (cudaEventRecord(record_event.event, *sched_streams[turn]) != cudaSuccess) {
+                        fprintf(stderr, "Scheduler event record failed\n");
+                        std::exit(EXIT_FAILURE);
+                    }
 					(*work_queue[turn]).pop();
 				}
 				break;
 
 				default:
 				fprintf(stderr, "Error: unknown record type\n");
+                    std::exit(EXIT_FAILURE);
 			}
 
 		}
@@ -257,7 +282,22 @@ int main(int argc, char** argv) {
 	pthread_t threads[THREAD_NUM + 1];
 
 	// data structure used for N client threads.
-	addKernel_arg args[THREAD_NUM];
+	arg_t args[THREAD_NUM];
+    if (argc == 2 && std::string(argv[1]) == "--list") { testcase::list(); return 0; }
+    if (argc != 1 && argc != 2 && argc != THREAD_NUM + 1) {
+        fprintf(stderr, "Usage: %s [name[:size[:iterations[:work[:seed]]]]]\n"
+                        "Supply one workload for all clients, or exactly %d specs.\n", argv[0], THREAD_NUM);
+        return 2;
+    }
+    try {
+        for (int i = 0; i < THREAD_NUM; ++i) {
+            const char* spec = argc == 1 ? "coverage" : argv[argc == 2 ? 1 : i + 1];
+            args[i].selection = testcase::parse(spec);
+            args[i].result = {false, "Not run"};
+        }
+    } catch (const std::exception& e) {
+        fprintf(stderr, "%s\n", e.what()); return 2;
+    }
 
 	size_t scheduler_idx = THREAD_NUM;
 
@@ -284,16 +324,15 @@ int main(int argc, char** argv) {
 
 	printf("assign_launch done.\n");
 
-	// before spawning threads, acquire start mutex.
-	pthread_mutex_init(&start_mutex, NULL);
-	pthread_mutex_lock(&start_mutex);
+
 
 	// create [num] threads to run kernel.
 	// each thread gets arguments.
 	printf("creating clients...\n");
 	for(int i = 0; i < THREAD_NUM; i++) {
-		args[i] = {&start_mutex};
-		pthread_create(&threads[i], NULL, chainedKernels_wrap, (void *)&args[i]);
+		if (pthread_create(&threads[i], NULL, thread_wrapper, &args[i]) != 0) {
+            fprintf(stderr, "Client creation failed\n"); std::exit(EXIT_FAILURE);
+        }
 		printf("created thread %d: id %ld\n", i, threads[i]);
 	}
 
@@ -307,13 +346,10 @@ int main(int argc, char** argv) {
 	// create scheduler.
 	printf("creating scheduler...\n");
 	scheduler_arg scarg;
-	pthread_create(&threads[scheduler_idx], NULL, scheduler, (void *)&scarg);
+	if (pthread_create(&threads[scheduler_idx], NULL, scheduler, &scarg) != 0) {
+        fprintf(stderr, "Scheduler creation failed\n"); std::exit(EXIT_FAILURE);
+    }
 	printf("created scheduler: id %ld\n", threads[scheduler_idx]);
-
-	// **unblock** every threads and start launching.
-	start_os = time(NULL);
-	// printf("launching...\n");
-	// pthread_mutex_unlock(&start_mutex);
 
 	// join everything.
 	for(int i = 0; i < THREAD_NUM + 1; i++) {
@@ -321,5 +357,12 @@ int main(int argc, char** argv) {
 	}
 	printf("launch complete.\n");
 
-    return 0;
+    bool passed = true;
+    for (int i = 0; i < THREAD_NUM; ++i) {
+        const auto& result = args[i].result;
+        printf("client %d %s: %s: %s\n", i, args[i].selection.entry->name,
+               result.passed ? "PASS" : "FAIL", result.message.c_str());
+        passed &= result.passed;
+    }
+    return passed ? 0 : 1;
 }

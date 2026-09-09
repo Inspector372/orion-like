@@ -9,7 +9,7 @@ typedef struct AtomMetaData {
 
 typedef void (*func_ptr_t)();
 
-__global__ void wrapper(const __grid_constant__ uint32_t argu);
+__global__ void wrapper(const __grid_constant__ uint64_t argu);
 
 extern CUfunction wrapper_handle;
 extern void table_insert(uint64_t, AtomMetaData);
