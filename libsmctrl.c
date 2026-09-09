@@ -34,12 +34,17 @@ struct global_sm_control {
 /*
 	AtomMetaData structure that is used on wrapper.
 	Additional fields can be added.
+
+	'signal' is special field that detects other launches outside host-call.
+	its used for debugging purpose.
 */
 typedef struct AtomMetaData_t{
 	uint64_t key;
     uint64_t kernel; 
     uint32_t lidx;
     uint32_t hidx; 
+
+	uint32_t signal;
 } AtomMetaData_t;
 
 /*
@@ -55,6 +60,7 @@ static uint8_t wrapper_register_cnt_v;
 */
 uint32_t launch_lidx;
 uint32_t launch_hidx;
+uint32_t launch_signal;
 uint32_t callback_mode = 0;
 
 
@@ -547,12 +553,19 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	uint8_t *register_cnt_ptr = (uint8_t*)(**((char***)in_params + 8) + 123);
 	
 	if (callback_mode == 0) {
+		fprintf(stderr, "libsmctrl: callback mode 0\n");
 		wrapper_progaddr_upper = *upper_ptr;
 		wrapper_progaddr_lower = *lower_ptr;
 		wrapper_register_cnt = *register_cnt_ptr;
 		wrapper_register_cnt_v = *register_cnt_v_ptr;
 	}
 	else if(callback_mode == 1) {
+		if(launch_signal == 0) {
+			fprintf(stderr, "[libsmctrl] Warning: Side-path launch aside of scheduler cudaLaunchKernel() detected!\n");
+			return;
+		}
+		launch_signal = 0;
+		// fprintf(stderr, "libsmctrl: callback mode 1\n");
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
 		uint64_t buffer_addr = (*buffer_start) & 0x0001ffffffffffff;
 		

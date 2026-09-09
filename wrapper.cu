@@ -50,6 +50,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
 
             cudaEventDestroy(copy_to);
             cudaEventDestroy(copy_from);
+            fprintf(stderr, "returning from table_insert...\n");
             return;
         }
         idx = (idx + 1) % MAP_LENGTH;

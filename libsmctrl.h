@@ -75,6 +75,7 @@ extern void assign_hash_insert(void*);
 
 extern uint32_t launch_lidx;
 extern uint32_t launch_hidx;
+extern uint32_t launch_signal;
 extern uint32_t callback_mode;
 
 #ifdef __cplusplus

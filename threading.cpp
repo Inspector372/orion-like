@@ -237,10 +237,12 @@ void* scheduler(void* scarg) {
 
 			switch(qrecord.type) {
 				case RECORD_CULAUNCHKERNEL: {
+					fprintf(stderr, "scheduler found job of #%d\n", turn);
 					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
 					// TODO: how to pass status?
 					launch_lidx = record.lidx;
 					launch_hidx = record.hidx;
+					launch_signal = 1;
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					(*work_queue[turn]).pop();
 					fprintf(stderr, "scheduler finish assigning job of #%d\n", turn);
@@ -250,7 +252,7 @@ void* scheduler(void* scarg) {
 
 				case RECORD_CUDAEVENT: {
 					record_cudaEvent record_event = qrecord.data.r_cudaEvent;
-					// fprintf(stderr, "event recorded for #%d\n", turn);
+					fprintf(stderr, "event recorded for #%d\n", turn);
 					if (cudaEventRecord(record_event.event, *sched_streams[turn]) != cudaSuccess) {
                         fprintf(stderr, "Scheduler event record failed\n");
                         std::exit(EXIT_FAILURE);

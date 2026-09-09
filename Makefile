@@ -10,7 +10,7 @@ libsmctrl.a:
 	ar rcs libsmctrl.a libsmctrl.o
 
 hooking.so: 
-	g++ -fPIC hooking.cpp -o hooking.so -shared -ldl
+	g++ -fPIC hooking.cpp -o hooking.so -shared -ldl -I/usr/local/cuda-12.8/include
 
 # -G option is important, this ignores some compiler optimization,
 # which leads to failure of kernel-inside-kernel launch.
