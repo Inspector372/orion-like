@@ -231,7 +231,7 @@ CUresult cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** ker
 }
 
 CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
-    fprintf(stderr, "[HOOK v1] Inside cuGetProcAddress looking for: %s\n", symbol);
+    // fprintf(stderr, "[HOOK v1] Inside cuGetProcAddress looking for: %s\n", symbol);
 
     if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
         fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel pointer assignment!\n");
@@ -257,7 +257,7 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
 }
 
 CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
-    fprintf(stderr, "[HOOK v2] Inside cuGetProcAddress_v2 looking for: %s\n", symbol);
+    // fprintf(stderr, "[HOOK v2] Inside cuGetProcAddress_v2 looking for: %s\n", symbol);
 
     if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
         fprintf(stderr, "[HOOK v2] Hijacking cuLaunchKernel pointer assignment!\n");
