@@ -83,8 +83,8 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu) {
     uint32_t lidx = atomMetaDataTable[idx].lidx;
     uint32_t hidx = atomMetaDataTable[idx].hidx;
 
-    size_t workIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    if (workIndex < lidx || workIndex >= hidx) return;
+    size_t block_idx = blockIdx.z * gridDim.y * gridDim.x + blockIdx.y * gridDim.x + blockIdx.x;
+    if (block_idx < lidx || block_idx >= hidx) return;
 
     ((func_ptr_t)kernel)();
 } 

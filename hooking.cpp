@@ -175,12 +175,16 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	fprintf(stderr, "[cuHook] caught call from %d!\n", idx);
 
 	// inspect kernel size and setup atomization info.
-	// for now, we assume they only have 1 dimension.
 
-	// TODO: dynamically adjust atom_size(need to look at lithOS paper.)
-	// TODO: expand them to 3 dimensions.
-	int atom_size = 1024;
-	int atom_num = ((gridDimX * blockDimX) % atom_size == 0) ? (gridDimX * blockDimX / atom_size) : (gridDimX * blockDimX / atom_size + 1);
+	// Change: now we atomize it in block boundary always.
+	// This is more logical.
+	int total_grid_dim = gridDimX * gridDimY * gridDimZ;
+
+	// atom_size is now defined as number of 'block'.
+	// TODO: dynamically adjust atom_size.
+	int atom_num = 8;
+	int atom_size = (total_grid_dim % atom_num == 0) ? (total_grid_dim / atom_num) : (total_grid_dim / atom_num + 1);
+	
 
 	CUresult err = CUDA_SUCCESS;
 	record_cuLaunchKernel new_record;

@@ -176,7 +176,6 @@ fill kernels remain CUDA implementation-dependent.
 
 ## TODO
 
-Launch of multiple dimensioned kernels
 Queueing of cudaMemset and Device-to-Device memcpy, and other implicit kernel calls
 cuDNN test
 pytorch test
