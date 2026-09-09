@@ -1,90 +1,153 @@
 # CUDA workload registry
 
-Each `.cu` defines kernels and one complete host workload declared in
+Each `.cu` file defines kernels and one complete host workload declared in
 `testcase.h`. Workloads own allocation, initialization, launches, synchronization,
-CPU verification, and cleanup. They contain no scheduler mutexes. `registry.cpp`
-maps names to functions. `thread_wrapper()` owns client startup and results.
+CPU verification, and cleanup. They contain no scheduler mutexes.
+
+`registry.cpp` maps names to functions and parses workload parameters.
+`thread_wrapper()` handles client startup, invokes the selected workload, and
+records its result.
 
 ## Build and run
 
+Build the scheduler and hooking library:
+
 ```sh
-make -j CUDA_HOME=/usr/local/cuda-12.8 ARCH=sm_70
-./testcase_runner --list
-./testcase_runner coverage:4097:3
-./testcase_runner matmul:64:10
-LD_PRELOAD=./hooking.so ./threading coverage:4097:3
+make hooking.so threading
 ```
 
-Use the architecture/toolkit appropriate to your GPU. The default retains the
-existing project's `sm_70` and `-G` injection requirements. This suite is not a
-validated optimized benchmark; do not compare debug builds with optimized ones.
-Run the standalone executable without the hooking library preloaded.
+List available workloads:
 
-Specifications are `name[:size[:iterations[:work[:seed]]]]`:
+```sh
+./threading --list
+```
 
-- `size`: element count, or square matrix dimension for matmul.
-- `iterations`: kernel repetitions; chained launches one initializer followed by
-  this many dependent transforms.
-- `work`: integer recurrence steps per thread, used only by compute.
-- `seed`: deterministic input seed, including zero.
+Run the same workload in every client:
 
-Sizes are 1..67108864 elements or 1..1024 for matmul; iterations/work are
-1..1000000. Large settings can take substantial time, including CPU verification.
+```sh
+LD_PRELOAD=./hooking.so ./threading coverage:4097:3
+LD_PRELOAD=./hooking.so ./threading matmul:64:10
+```
+
+Use the CUDA toolkit and architecture appropriate to your GPU. Keep build
+settings consistent when comparing results.
+
+## Workload parameters
+
+Specifications use this format:
+
+```text
+name[:size[:iterations[:work[:seed]]]]
+```
+
+* `size`: element count, or square matrix dimension for matmul.
+* `iterations`: kernel repetitions. The chained workload launches one initializer
+  followed by this many dependent transforms.
+* `work`: integer recurrence steps per thread; used only by compute.
+* `seed`: deterministic input seed, including zero.
+
+Default workloads and sizes:
+
+| Name         | Default size | Purpose                                       |
+| ------------ | -----------: | --------------------------------------------- |
+| `coverage`   |         4097 | Detect missing or duplicated execution        |
+| `vector_add` |        65536 | Exercise memory traffic and verify addition   |
+| `matmul`     |           64 | Verify matrix multiplication with 1D indexing |
+| `compute`    |         4096 | Vary arithmetic work per thread               |
+| `chained`    |         4097 | Verify dependent kernel execution             |
+
+Defaults for `iterations`, `work`, and `seed` are 1, 256, and 1.
+
+Supported sizes are 1–67108864 elements, or 1–1024 for matmul.
+Iterations and work must be within 1–1000000. Large settings can take substantial
+time, including CPU verification.
+
 All supplied kernels use 1D grids and 256-thread blocks, aligned with the
 scheduler's current 1024-thread atoms.
 
-`threading` accepts no specs (coverage for all clients), one spec repeated for all
-clients, or exactly `THREAD_NUM` specs. The current repository uses four clients.
-Arguments are validated before scheduler initialization. Both runners return
-nonzero for mismatches or errors. The scheduler runs until all clients finish
-and queues drain; use an external watchdog for deadlocks, e.g.:
+## Client selection
+
+`threading` accepts:
+
+* No specifications: run coverage with default parameters for every client.
+* One specification: run that configuration for every client.
+* Exactly `THREAD_NUM` specifications: assign one configuration to each client.
+
+The current configuration uses four clients. Arguments are validated before
+scheduler initialization. Workload mismatches or errors produce a nonzero
+exit status.
+
+The scheduler runs until all clients finish and queues drain. Use an external
+timeout to detect hangs:
 
 ```sh
 timeout 60s env LD_PRELOAD=./hooking.so ./threading coverage:4097:3
 ```
 
-Run `make test-host` for host-only registry and invalid-argument checks; this
-does not validate CUDA execution.
-
 ## Scheduling scenarios
 
-These commands define scenarios without requiring a JSON parser:
+Compute versus memory:
 
 ```sh
-# Compute versus memory, repeated across four clients.
-LD_PRELOAD=./hooking.so ./threading compute:4096:10:4096 vector_add:1048576:10 compute:4096:10:4096 vector_add:1048576:10
-# Short versus long kernels.
-LD_PRELOAD=./hooking.so ./threading coverage:256:100 compute:16384:10:4096 coverage:256:100 compute:16384:10:4096
-# Ordering and mixed workloads.
-LD_PRELOAD=./hooking.so ./threading chained:4097:10 matmul:64:10 vector_add:65536:10 coverage:4097:10
+LD_PRELOAD=./hooking.so ./threading \
+    compute:4096:10:4096 \
+    vector_add:1048576:10 \
+    compute:4096:10:4096 \
+    vector_add:1048576:10
 ```
 
-Start by checking every workload standalone. Sweep coverage sizes 256, 768,
-1024, 1025, 1280, 1792, 2048, 2304, and 4097, then run the same specs scheduled.
-Coverage detects omitted and duplicate execution; chained checks dependencies;
-vector_add exercises memory traffic; compute varies arithmetic duration; matmul
-provides a complete 1D matrix workload with full CPU verification.
+Short versus long kernels:
 
-The hook redirects kernels to per-client scheduler streams. These initial tests
-use a final device synchronization before reading outputs. Device-wide waits can
+```sh
+LD_PRELOAD=./hooking.so ./threading \
+    coverage:256:100 \
+    compute:16384:10:4096 \
+    coverage:256:100 \
+    compute:16384:10:4096
+```
+
+Ordering and mixed workloads:
+
+```sh
+LD_PRELOAD=./hooking.so ./threading \
+    chained:4097:10 \
+    matmul:64:10 \
+    vector_add:65536:10 \
+    coverage:4097:10
+```
+
+Start with coverage sizes 256, 768, 1024, 1025, 1280, 1792, 2048, 2304,
+and 4097 to exercise launches around atom boundaries. Then run the other
+workloads individually across clients before trying mixed scenarios.
+
+## Timing and compatibility
+
+The hook redirects kernels to per-client scheduler streams. These tests use a
+final device synchronization before reading outputs. Device-wide waits can
 include other clients, so whole-function runtime is not isolated GPU latency.
-Accurate per-client GPU timing needs events on the scheduler's actual streams.
-No performance thresholds or fairness claims are imposed by this correctness suite.
+
+Accurate per-client GPU timing requires events on the scheduler's actual streams.
+This correctness suite imposes no performance thresholds or fairness guarantees.
+
+The low-level interception and metadata injection require GPU validation.
+Multidimensional, cooperative, and library launches are not covered by these
+initial workloads.
 
 ## Add a workload
 
-1. Create `testcase/name.cu` with `Result name(const Config&)` and local kernels.
+1. Create `testcase/name.cu` with `Result name(const Config&)` and its kernels.
 2. Declare the function in `testcase.h`.
-3. Add its name, function, and default size to `registry.cpp`; update parameter
-   validation if it needs different limits or semantics.
-4. Run `make`; CUDA source files in this directory are discovered automatically.
-5. Verify standalone, then schedule it alongside existing workloads.
+3. Add its name, function, and default size to `registry.cpp`.
+4. Update parameter validation if it needs different limits or semantics.
+5. Run `make threading` to compile and link it.
+6. Run the workload across clients, then alongside existing workloads.
+
+The Makefile discovers workload `.cu` files through `TEST_SOURCES`.
+`TEST_OBJECTS` must also include `testcase/registry.o`.
 
 Use checked CUDA calls, deterministic per-call inputs, and meaningful output
-verification. Resources must outlive all launches. Do not add a `main()` to the
-workload files; `standalone.cpp` supplies it. Exceptions are caught by the runners,
-and the common device buffer releases allocations during unwinding.
+verification. Resources must outlive all launches. Workload files should expose
+their registered function rather than define `main()`.
 
-The existing low-level interception and metadata injection still need GPU
-validation. Unsupported multidimensional, cooperative, or library launches are
-not covered by these initial workloads.
+Exceptions are caught by `thread_wrapper()`, and the common device buffer
+releases allocations during exception unwinding.

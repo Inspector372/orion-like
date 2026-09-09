@@ -32,10 +32,10 @@ struct arg_t {
     testcase::Result result;
 };
 std::atomic<int> clients_done{0};
+
 cudaError_t (*actual_cudaDeviceSynchronize)(void) = nullptr;
 
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
-
 
 // hooking.cpp
 void* klib;
@@ -109,6 +109,7 @@ void register_functions() {
 	*(void **)(&actual_cuLaunchKernel) = dlsym(handle, "cuLaunchKernel");
 	assert(actual_cuLaunchKernel != NULL);
 
+	// for wrapper, initial wrapper run.
 	*(void**)(&actual_cudaDeviceSynchronize) = dlsym(RTLD_DEFAULT, "cudaDeviceSynchronize");
     assert(actual_cudaDeviceSynchronize != nullptr);
 
@@ -176,7 +177,7 @@ void create_streams() {
 	if(*lp == *hp)
 		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp);
 	else
-		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp + 1);
+		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp - 1);
 
 	cudaStream_t* fake_launch_stream_ptr = (cudaStream_t*)dlsym(klib, "fl_stream");
 	cudaStreamCreateWithPriority(fake_launch_stream_ptr, cudaStreamNonBlocking, *hp);
@@ -240,11 +241,7 @@ void* scheduler(void* scarg) {
 					// TODO: how to pass status?
 					launch_lidx = record.lidx;
 					launch_hidx = record.hidx;
-					CUresult launch_status = (*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
-                    if (launch_status != CUDA_SUCCESS) {
-                        fprintf(stderr, "Scheduler launch failed: %d\n", int(launch_status));
-                        std::exit(EXIT_FAILURE);
-                    }
+					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					(*work_queue[turn]).pop();
 					fprintf(stderr, "scheduler finish assigning job of #%d\n", turn);
 
