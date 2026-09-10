@@ -34,6 +34,8 @@ struct arg_t {
 std::atomic<int> clients_done{0};
 
 cudaError_t (*actual_cudaDeviceSynchronize)(void) = nullptr;
+cudaError_t (*actual_cudaMemset)(void*, int, size_t) = nullptr;
+cudaError_t (*actual_cudaMemsetAsync)(void*, int, size_t, cudaStream_t) = nullptr;
 
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 
@@ -110,8 +112,14 @@ void register_functions() {
 	assert(actual_cuLaunchKernel != NULL);
 
 	// for wrapper, initial wrapper run.
-	*(void**)(&actual_cudaDeviceSynchronize) = dlsym(RTLD_DEFAULT, "cudaDeviceSynchronize");
+	*(void**)(&actual_cudaDeviceSynchronize) = dlsym(RTLD_NEXT, "cudaDeviceSynchronize");
     assert(actual_cudaDeviceSynchronize != nullptr);
+
+	*(void**)(&actual_cudaMemset) = dlsym(RTLD_NEXT, "cudaMemset");
+    assert(actual_cudaMemset != nullptr);
+
+	*(void**)(&actual_cudaMemsetAsync) = dlsym(RTLD_NEXT, "cudaMemsetAsync");
+    assert(actual_cudaMemsetAsync != nullptr);
 
     // assign hash_insert_callback of libsmctrl.
 	assign_hash_insert((void*)hash_insert);
@@ -255,6 +263,27 @@ void* scheduler(void* scarg) {
 					fprintf(stderr, "event recorded for #%d\n", turn);
 					if (cudaEventRecord(record_event.event, *sched_streams[turn]) != cudaSuccess) {
                         fprintf(stderr, "Scheduler event record failed\n");
+                        std::exit(EXIT_FAILURE);
+                    }
+					(*work_queue[turn]).pop();
+				}
+				break;
+
+				case RECORD_CUDAMEMSET: {
+					record_cudaMemset record_event = qrecord.data.r_cudaMemset;
+					if (actual_cudaMemset(record_event.devPtr, record_event.value, record_event.count) != cudaSuccess) {
+                        fprintf(stderr, "Scheduler memset record failed\n");
+                        std::exit(EXIT_FAILURE);
+                    }
+					(*work_queue[turn]).pop();
+				}
+				break;
+
+				case RECORD_CUDAMEMSETASYNC: {
+					// We use synchronous version... for now.
+					record_cudaMemsetAsync record_event = qrecord.data.r_cudaMemsetAsync;
+					if (actual_cudaMemset(record_event.devPtr, record_event.value, record_event.count) != cudaSuccess) {
+                        fprintf(stderr, "Scheduler memsetAsync record failed\n");
                         std::exit(EXIT_FAILURE);
                     }
 					(*work_queue[turn]).pop();

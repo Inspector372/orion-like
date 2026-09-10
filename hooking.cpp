@@ -29,6 +29,9 @@ cudaStream_t fl_stream;
 
 pthread_mutex_t* table_mutex;
 
+cudaError_t (*real_cudaMemset)(void* devPtr, int value, size_t count) = NULL;
+cudaError_t (*real_cudaMemsetAsync)(void* devPtr, int value, size_t count, cudaStream_t stream) = NULL;
+
 cudaError_t (*real_cudaLaunchKernel)(const void*, dim3, dim3, void**, size_t, cudaStream_t) = NULL;
 
 CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
@@ -128,6 +131,11 @@ extern "C" {
 	cudaEventDestroy(event);
 }*/
 
+/*
+	Hook for cudaLaunchKernel, ... etc
+	Those runtime API creates collision with APIs called inside libsmctrl.
+*/
+
 cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream) {
 	if (real_cudaLaunchKernel == NULL) {
         real_cudaLaunchKernel = (cudaError_t (*)(const void*, dim3, dim3, void**, size_t, cudaStream_t))real_dlsym(RTLD_NEXT, "cudaLaunchKernel");
@@ -147,6 +155,80 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	return err;
 }
 
+/*
+	Hook for cudaMemset, cudaMemsetAsync, ...
+	cudaMemcpy DtoD, ...
+	which internally calls a kernel silently.
+	They *must* be launched with the scheduler, otherwise it will break libsmctrl logic!
+	
+*/
+cudaError_t cudaMemset(void* devPtr, int value, size_t count) {
+	if (real_cudaMemset == NULL) {
+        real_cudaMemset = (cudaError_t (*)(void*, int, size_t))real_dlsym(RTLD_NEXT, "cudaMemset");
+        if(real_cudaMemset == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cudaMemset == NULL\n");
+        }
+    }
+	fprintf(stderr, "[cudaMemsetHook] hooked from someone!\n");
+	int idx = get_idx();
+	fprintf(stderr, "[cudaMemsetHook] hooked from %d!\n", idx);
+
+	assert(work_queue_mutex != NULL);
+	assert(work_queue != NULL);
+
+	record_cudaMemset new_record;
+	new_record = {devPtr, value, count};
+	union record_data new_record_data;
+	new_record_data.r_cudaMemset = new_record;
+	queue_record new_qrecord = {RECORD_CUDAMEMSET, new_record_data};
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+	work_queue[idx]->push(new_qrecord);
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+	
+	fprintf(stderr, "[cudaMemsetHook] blocking from %d!\n", idx);
+	block(idx, work_queue_mutex, work_queue);
+	fprintf(stderr, "[cudaMemsetHook] unblocking from %d!\n", idx);
+
+	return cudaSuccess;
+
+}
+
+cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t stream) {
+	if (real_cudaMemsetAsync == NULL) {
+        real_cudaMemsetAsync = (cudaError_t (*)(void*, int, size_t, cudaStream_t))real_dlsym(RTLD_NEXT, "cudaMemsetAsync");
+        if(real_cudaMemsetAsync == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cudaMemsetAsync == NULL\n");
+        }
+    }
+	fprintf(stderr, "[cudaMemsetAsyncHook] hooked from someone!\n");
+	int idx = get_idx();
+	fprintf(stderr, "[cudaMemsetAsyncHook] hooked from %d!\n", idx);
+
+	assert(work_queue_mutex != NULL);
+	assert(work_queue != NULL);
+
+	record_cudaMemsetAsync new_record;
+	new_record = {devPtr, value, count, stream};
+	union record_data new_record_data;
+	new_record_data.r_cudaMemsetAsync = new_record;
+	queue_record new_qrecord = {RECORD_CUDAMEMSETASYNC, new_record_data};
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+	work_queue[idx]->push(new_qrecord);
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+	
+	// Async is not blocking, need to remove it later if correct logic is there.
+	fprintf(stderr, "[cudaMemsetHookAsync] blocking from %d!\n", idx);
+	block(idx, work_queue_mutex, work_queue);
+	fprintf(stderr, "[cudaMemsetHookAsync] unblocking from %d!\n", idx);
+
+	return cudaSuccess;
+}
+
+/*
+	Hook for cuLaunchKernel, cuLaunchKernelEx...
+*/
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
                         unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
