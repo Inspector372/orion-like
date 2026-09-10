@@ -218,10 +218,8 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t 
 	work_queue[idx]->push(new_qrecord);
 	pthread_mutex_unlock(work_queue_mutex[idx]);
 	
-	// Async is not blocking, need to remove it later if correct logic is there.
-	fprintf(stderr, "[cudaMemsetHookAsync] blocking from %d!\n", idx);
-	block(idx, work_queue_mutex, work_queue);
-	fprintf(stderr, "[cudaMemsetHookAsync] unblocking from %d!\n", idx);
+	// Async is not blocking 'at user level', so no block here.
+	// but it's certainly blocking 'at OS level'.
 
 	return cudaSuccess;
 }

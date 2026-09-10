@@ -174,12 +174,6 @@ between phases preserves dependencies across scheduler-remapped streams; this
 is a correctness stress test, not an asynchronous overlap benchmark. Internal
 fill kernels remain CUDA implementation-dependent.
 
-## TODO
-
-Queueing of cudaMemset and Device-to-Device memcpy, and other implicit kernel calls
-cuDNN test
-pytorch test
-
 ## cuBLASLt workloads
 
 - `cublaslt_matmul`: square FP32 GEMM, C = A * B.
@@ -208,3 +202,10 @@ and may launch multiple internal kernels. The existing 1D atomization and
 injected-entry design may not support those kernels. A successful API submission
 alone does not establish scheduler compatibility. The Makefile links
 `-lcublasLt`; CUDA compilation and GPU execution must be validated locally.
+
+## TODO
+
+Queueing of Device-to-Device memcpy, and look other implicit kernel calls
+MemsetAsync to 'truly' asynchronous
+cuDNN test
+pytorch test
