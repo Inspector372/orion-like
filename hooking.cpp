@@ -35,7 +35,12 @@ cudaError_t (*real_cudaMemsetAsync)(void* devPtr, int value, size_t count, cudaS
 cudaError_t (*real_cudaLaunchKernel)(const void*, dim3, dim3, void**, size_t, cudaStream_t) = NULL;
 
 CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
-CUresult (*real_cuLaunchKernelEx)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra);
+CUresult (*real_cuLaunchKernelEx)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) = NULL;
+CUresult (*real_cuLaunchKernel_ptsz)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
+CUresult (*real_cuLaunchKernelEx_ptsz)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) = NULL;
+CUresult (*real_cuGraphLaunch)(CUgraphExec hGraphExec, CUstream hStream) = NULL;
+CUresult (*real_cuLaunchCooperativeKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**) = NULL;
+
 
 typedef CUresult (*cuGetProcAddress_t)(const char*, void**, int, unsigned int, void*);
 cuGetProcAddress_t real_cuGetProcAddress = NULL;
@@ -309,9 +314,77 @@ CUresult cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** ker
             fprintf(stderr, "FATAL ERROR: real_cuLaunchKernelEx == cuLaunchKernelEx\n");
         }
     }
-	real_cuLaunchKernelEx(config, f, kernelParams, extra);
+	return real_cuLaunchKernelEx(config, f, kernelParams, extra);
 
 	
+}
+
+CUresult cuLaunchKernel_ptsz(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
+                        unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
+                        unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
+	fprintf(stderr, "cuLaunchKernel_ptsz is captured!\n");
+	if (real_cuLaunchKernel_ptsz == NULL) {
+        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+        real_cuLaunchKernel_ptsz = (CUresult (*)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**))real_dlsym(cu_handle, "cuLaunchKernel_ptsz");
+        if(real_cuLaunchKernel_ptsz == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernel_ptsz == NULL\n");
+        }
+        if(real_cuLaunchKernel_ptsz == cuLaunchKernel_ptsz) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernel_ptsz == cuLaunchKernel_ptsz\n");
+        }
+    }
+	return real_cuLaunchKernel_ptsz(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
+
+	
+}
+
+CUresult cuLaunchKernelEx_ptsz(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) {
+	fprintf(stderr, "cuLaunchKernelEx_ptsz is captured!\n");
+	if (real_cuLaunchKernelEx_ptsz == NULL) {
+        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+        real_cuLaunchKernelEx_ptsz = (CUresult (*)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra))real_dlsym(cu_handle, "cuLaunchKernelEx_ptsz");
+        if(real_cuLaunchKernelEx_ptsz == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernelEx_ptsz == NULL\n");
+        }
+        if(real_cuLaunchKernelEx_ptsz == cuLaunchKernelEx_ptsz) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernelEx_ptsz == cuLaunchKernelEx_ptsz\n");
+        }
+    }
+	return real_cuLaunchKernelEx_ptsz(config, f, kernelParams, extra);
+
+}
+
+CUresult cuGraphLaunch(CUgraphExec hGraphExec, CUstream hStream) {
+	fprintf(stderr, "cuGraphLaunch is captured!\n");
+	if (real_cuGraphLaunch == NULL) {
+        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+        real_cuGraphLaunch = (CUresult (*)(CUgraphExec, CUstream))real_dlsym(cu_handle, "cuGraphLaunch");
+        if(real_cuGraphLaunch == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuGraphLaunch == NULL\n");
+        }
+        if(real_cuGraphLaunch == cuGraphLaunch) {
+            fprintf(stderr, "FATAL ERROR: real_cuGraphLaunch == cuGraphLaunch\n");
+        }
+    }
+	return real_cuGraphLaunch(hGraphExec, hStream);
+	
+}
+
+CUresult cuLaunchCooperativeKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
+                        		unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
+                        		unsigned int sharedMemBytes, CUstream hStream, void** kernelParams) {
+	fprintf(stderr, "cuLaunchCooperativeKernel is captured!\n");
+	if (real_cuLaunchCooperativeKernel == NULL) {
+        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+        real_cuLaunchCooperativeKernel = (CUresult (*)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**))real_dlsym(cu_handle, "cuLaunchCooperativeKernel");
+        if(real_cuLaunchCooperativeKernel == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchCooperativeKernel == NULL\n");
+        }
+        if(real_cuLaunchCooperativeKernel == cuLaunchCooperativeKernel) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchCooperativeKernel == cuLaunchCooperativeKernel\n");
+        }
+    }
+	return real_cuLaunchCooperativeKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams);
 }
 
 CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
@@ -326,6 +399,30 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
 	if (symbol && strcmp(symbol, "cuLaunchKernelEx") == 0) {
         fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernelEx pointer assignment!\n");
         *pfn = (void*)cuLaunchKernelEx;
+        return CUDA_SUCCESS;
+    }
+
+	if (symbol && strcmp(symbol, "cuGraphLaunch") == 0) {
+        fprintf(stderr, "[HOOK v1] Hijacking cuGraphLaunch pointer assignment!\n");
+        *pfn = (void*)cuGraphLaunch;
+        return CUDA_SUCCESS;
+    }
+
+	if (symbol && strcmp(symbol, "cuLaunchKernel_ptsz") == 0) {
+        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel_ptsz pointer assignment!\n");
+        *pfn = (void*)cuGraphLaunch;
+        return CUDA_SUCCESS;
+    }
+
+	if (symbol && strcmp(symbol, "cuLaunchKernelEx_ptsz") == 0) {
+        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernelEx_ptsz pointer assignment!\n");
+        *pfn = (void*)cuGraphLaunch;
+        return CUDA_SUCCESS;
+    }
+
+	if (symbol && strcmp(symbol, "cuLaunchCooperativeKernel") == 0) {
+        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchCooperativeKernel pointer assignment!\n");
+        *pfn = (void*)cuLaunchCooperativeKernel;
         return CUDA_SUCCESS;
     }
 
