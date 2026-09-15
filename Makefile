@@ -1,8 +1,8 @@
 # Optional cuDNN C++ Frontend workloads (headers from NVIDIA/cudnn-frontend v1.9.0).
 ENABLE_CUDNN ?= 0
-CUDNN_FRONTEND_DIR ?= /opt/cudnn-frontend
-CUDNN_INCLUDE_DIR ?= /usr/local/cuda-12.8/include
-CUDNN_LIB_DIR ?= /usr/local/cuda-12.8/lib64
+CUDNN_FRONTEND_DIR ?= ../cudnn-frontend
+CUDNN_INCLUDE_DIR ?= /usr/include/x86_64-linux-gnu
+CUDNN_LIB_DIR ?= /usr/lib/x86_64-linux-gnu
 CUDNN_OBJECTS := testcase/cudnn_matmul.o testcase/cudnn_convolution.o testcase/cudnn_layernorm.o testcase/cudnn_attention.o
 ifeq ($(ENABLE_CUDNN),1)
 CUDNN_CPPFLAGS = -DORION_ENABLE_CUDNN=1 -I$(CUDNN_FRONTEND_DIR)/include -I$(CUDNN_INCLUDE_DIR)
@@ -40,7 +40,7 @@ testcase/registry.o: testcase/registry.cpp testcase/testcase.h
 testcase/cublaslt_matmul.o testcase/cublaslt_chained.o: testcase/cublaslt_common.cuh
 
 threading: threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o
-	nvcc -G -g -Xcompiler -pthread threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o -o threading -ldl -lcudart -lcuda -lcublasLt $(CUDNN_LIBS) -L/usr/local/cuda-12.8/lib64/stubs
+	nvcc -G -g -Xcompiler -pthread threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o -o threading -ldl -L/usr/local/cuda-12.8/lib64 -lcudart -lcuda -lcublasLt $(CUDNN_LIBS) -L/usr/local/cuda-12.8/lib64/stubs
 
 clean:
 	rm -f libsmctrl.o libsmctrl.a hooking.so wrapper.o threading.o threading testcase/*.o
