@@ -209,3 +209,9 @@ Queueing of Device-to-Device memcpy, and look other implicit kernel calls
 MemsetAsync to 'truly' asynchronous
 cuDNN test
 pytorch test
+## cuDNN C++ API tests
+
+Optional cuDNN Frontend workloads: `cudnn_matmul`, `cudnn_convolution`,
+`cudnn_layernorm`, and `cudnn_attention`. They include complete CPU verification
+and no explicit memset calls. Enable with `ENABLE_CUDNN=1` and supply your cuDNN
+and Frontend include/library paths. See [cuDNN setup, shapes, and examples](testcase/CUDNN.md).

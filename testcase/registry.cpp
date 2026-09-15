@@ -10,7 +10,11 @@ static const Entry entries[] = {
     {"matmul", matmul, 64}, {"compute", compute, 4096},
     {"chained", chained, 4097}, {"memset", memset, 4097},
     {"cublaslt_matmul", cublaslt_matmul, 64},
-    {"cublaslt_chained", cublaslt_chained, 64}
+    {"cublaslt_chained", cublaslt_chained, 64},
+    {"cudnn_matmul", cudnn_matmul, 64},
+    {"cudnn_convolution", cudnn_convolution, 16},
+    {"cudnn_layernorm", cudnn_layernorm, 128},
+    {"cudnn_attention", cudnn_attention, 64}
 };
 const Entry* find(const std::string& name) {
     for (const auto& e : entries) if (name == e.name) return &e;
@@ -39,7 +43,13 @@ Selection parse(const std::string& spec) {
         values[i-1] = std::stoull(parts[i]);
     }
     // Bound sizes to keep the scheduler's signed 1D atom arithmetic valid.
-    const auto max_size = (parts[0] == "matmul" || parts[0] == "cublaslt_matmul" || parts[0] == "cublaslt_chained") ? 1024ull : (1ull << 26);
+    auto max_size = (parts[0] == "matmul" || parts[0] == "cublaslt_matmul" || parts[0] == "cublaslt_chained") ? 1024ull : (1ull << 26);
+    unsigned long long multiple = 1;
+    if (parts[0] == "cudnn_matmul") { max_size=512; multiple=8; }
+    if (parts[0] == "cudnn_convolution") max_size=128;
+    if (parts[0] == "cudnn_layernorm") { max_size=4096; multiple=8; }
+    if (parts[0] == "cudnn_attention") { max_size=512; multiple=64; }
+    if (values[0] % multiple) throw std::invalid_argument("Unsupported cuDNN size alignment: " + spec);
     if (!values[0] || values[0] > max_size || !values[1] || values[1] > 1000000 ||
         !values[2] || values[2] > 1000000 || values[3] > UINT32_MAX)
         throw std::invalid_argument("Parameter outside supported range: " + spec);
@@ -47,3 +57,4 @@ Selection parse(const std::string& spec) {
     return {entry, c};
 }
 }
+
