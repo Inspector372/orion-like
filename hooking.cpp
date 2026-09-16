@@ -18,6 +18,10 @@
 
 #include "hooking.h"
 
+typedef cudaError_t (*PFN_cudaLaunchKernel)(
+    const void*, dim3, dim3, void**, size_t, cudaStream_t
+);
+
 using namespace std;
 
 bool no_hook = true;
@@ -498,6 +502,19 @@ void* dlsym(void* handle, const char* symbol) {
         real_cuGetProcAddress_v2 = (cuGetProcAddress_t)real_dlsym(handle, symbol);
         
         return (void*)my_cuGetProcAddress_v2;
+    }
+
+	/* 
+		cuLaunchKernel-style dlsym() is needed because cublas finds cuLaunchKernel() using dlsym().
+	*/
+	if (symbol && (strcmp(symbol, "cuLaunchKernel") == 0)) {
+        fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
+        return (void*)cuLaunchKernel;
+    }
+	if (symbol && (strcmp(symbol, "cudaLaunchKernel") == 0)) {
+        fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
+		PFN_cudaLaunchKernel target_func = &::cudaLaunchKernel; 
+        return (void*)target_func;
     }
 
     return real_dlsym(handle, symbol);
