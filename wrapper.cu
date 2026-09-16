@@ -23,20 +23,15 @@ void table_insert(uint64_t key, AtomMetaData value) {
     cudaEventCreateWithFlags(&copy_to, cudaEventBlockingSync);
     cudaEventCreateWithFlags(&copy_from, cudaEventBlockingSync);
 
-    fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
+    // fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
     
     for(int i = 0; i < MAP_LENGTH; i++) {
-        fprintf(stderr, "table_insert starting, mem_copy to host 1\n");
         cudaMemcpyFromSymbolAsync(&metadata, atomMetaDataTable, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyDeviceToHost, metadata_pass_stream);
-        fprintf(stderr, "table_insert starting, mem_copy to host 2\n");
         cudaEventRecord(copy_to, metadata_pass_stream);
-
-        fprintf(stderr, "Synchronizing to copy_to...\n");
         cudaEventSynchronize(copy_to);
         if(metadata.key == 0) {
             cudaMemcpyToSymbolAsync(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream);
             cudaEventRecord(copy_from, metadata_pass_stream);
-            fprintf(stderr, "Synchronizing to copy_from...\n");
             cudaEventSynchronize(copy_from);
 
 
@@ -50,7 +45,6 @@ void table_insert(uint64_t key, AtomMetaData value) {
 
             cudaEventDestroy(copy_to);
             cudaEventDestroy(copy_from);
-            fprintf(stderr, "returning from table_insert...\n");
             return;
         }
         idx = (idx + 1) % MAP_LENGTH;

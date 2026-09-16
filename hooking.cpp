@@ -256,6 +256,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 		return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
 	}
 	// TODO: wary about situation that the execution stops at cudaLaunchKernel();
+	// or cuLaunchKernel();
 	// where this mutex must be unlocked separately.
 	pthread_mutex_unlock(table_mutex);
 
