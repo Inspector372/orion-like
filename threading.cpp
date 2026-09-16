@@ -108,17 +108,18 @@ void register_functions() {
 	void* handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
 
     // for kernel
-	*(void **)(&actual_cuLaunchKernel) = dlsym(handle, "cuLaunchKernel");
+	void* (*actual_dlsym)(void*, const char*) = (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");;
+	*(void **)(&actual_cuLaunchKernel) = actual_dlsym(handle, "cuLaunchKernel");
 	assert(actual_cuLaunchKernel != NULL);
 
 	// for wrapper, initial wrapper run.
 	*(void**)(&actual_cudaDeviceSynchronize) = dlsym(RTLD_NEXT, "cudaDeviceSynchronize");
     assert(actual_cudaDeviceSynchronize != nullptr);
 
-	*(void**)(&actual_cudaMemset) = dlsym(RTLD_NEXT, "cudaMemset");
+	*(void**)(&actual_cudaMemset) = actual_dlsym(RTLD_NEXT, "cudaMemset");
     assert(actual_cudaMemset != nullptr);
 
-	*(void**)(&actual_cudaMemsetAsync) = dlsym(RTLD_NEXT, "cudaMemsetAsync");
+	*(void**)(&actual_cudaMemsetAsync) = actual_dlsym(RTLD_NEXT, "cudaMemsetAsync");
     assert(actual_cudaMemsetAsync != nullptr);
 
     // assign hash_insert_callback of libsmctrl.
