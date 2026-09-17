@@ -29,8 +29,8 @@ Expected layout:
 
 ```text
 parent/
-  libtorch/include/
-  libtorch/lib/
+  libtorch-cu126/libtorch/include/
+  libtorch-cu126/libtorch/lib/
   orion-like/Makefile
 ```
 
@@ -42,14 +42,30 @@ The LibTorch files on your machine are not downloaded by this Makefile.
 make ENABLE_LIBTORCH=1
 ```
 
-The default is `LIBTORCH_DIR=../libtorch`. To override it:
+The default is `LIBTORCH_DIR=../libtorch-cu126/libtorch`. To override it:
 
 ```bash
 make ENABLE_LIBTORCH=1 LIBTORCH_DIR=/absolute/path/to/libtorch
 ```
 
-The `.cpp` testcases compile with the host C++ compiler (`CXX`, normally g++)
-and C++17. They contain no custom CUDA kernel definitions and do not require
+The enabled LibTorch `.cpp` testcases compile with `LIBTORCH_CXX` (default
+`g++-12`) and C++20. Install that compiler or select a newer compatible one:
+
+```bash
+make ENABLE_LIBTORCH=1 LIBTORCH_CXX=g++-13
+```
+
+GCC 10 reports `__cplusplus=201709L` even in its experimental C++20 mode;
+it fails ATen's `202002L` check. Changing only `-std=c++20` is not enough.
+The `check-libtorch-compiler` target checks this before compiling the tests.
+Do not redefine `__cplusplus` or remove ATen's check.
+
+Other host files use `CXX` (currently `g++-10`), and nvcc keeps its existing
+host-compiler selection. The runner does not include ATen and only needs
+C++17 when LibTorch is enabled. A disabled LibTorch build uses `CXX` and
+C++17 for its stubs; it does not require `g++-12`.
+
+The LibTorch testcase files contain no custom CUDA kernel definitions and do not require
 nvcc compilation; their tensor operations dispatch into LibTorch's CUDA
 libraries. The existing nvcc link step remains in place. Both LibTorch include
 directories and the CUDA/CPU Torch libraries are supplied by the Makefile.
@@ -78,7 +94,7 @@ LibTorch's absolute library directory is added to the executable's rpath. If
 the loader cannot find bundled transitive dependencies, run with:
 
 ```bash
-export LD_LIBRARY_PATH="$(pwd)/../libtorch/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$(pwd)/../libtorch-cu126/libtorch/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ```
 
 ## Run
