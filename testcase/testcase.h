@@ -26,6 +26,8 @@ Result cudnn_matmul(const Config&);
 Result cudnn_convolution(const Config&);
 Result cudnn_layernorm(const Config&);
 Result cudnn_attention(const Config&);
+Result libtorch_feedforward(const Config&);
+Result libtorch_convolution(const Config&);
 const Entry* find(const std::string& name);
 void list();
 // name[:size[:iterations[:work[:seed]]]]; throws on invalid input.

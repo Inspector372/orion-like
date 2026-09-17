@@ -210,8 +210,28 @@ Optional cuDNN Frontend workloads: `cudnn_matmul`, `cudnn_convolution`,
 and no explicit memset calls. Enable with `ENABLE_CUDNN=1` and supply your cuDNN
 and Frontend include/library paths. See [cuDNN setup, shapes, and examples](testcase/CUDNN.md).
 
+## LibTorch CUDA tests
+
+Two optional forward-only C++ workloads use the existing registry:
+
+- `libtorch_feedforward`: Linear, ReLU, Linear (default feature width 64).
+- `libtorch_convolution`: explicit LibTorch cuDNN convolution and ReLU (default image side 16).
+
+Both verify GPU results against CPU references on every iteration. The Makefile
+uses `../libtorch` by default; no CMake conversion is needed.
+
+```sh
+make ENABLE_LIBTORCH=1
+LD_PRELOAD=./hooking.so ./threading libtorch_feedforward:64:3
+LD_PRELOAD=./hooking.so ./threading libtorch_convolution:16:3
+```
+
+See [LibTorch setup, ABI settings, and interception notes](testcase/LIBTORCH.md).
+These host `.cpp` files dispatch GPU operations through LibTorch, so they are
+compiled by g++ and linked into the same `threading` executable.
+
 ## TODO
 
 Queueing of Device-to-Device memcpy, and look other implicit kernel calls
 MemsetAsync to 'truly' asynchronous
-pytorch test
+

@@ -14,7 +14,9 @@ static const Entry entries[] = {
     {"cudnn_matmul", cudnn_matmul, 64},
     {"cudnn_convolution", cudnn_convolution, 16},
     {"cudnn_layernorm", cudnn_layernorm, 128},
-    {"cudnn_attention", cudnn_attention, 64}
+    {"cudnn_attention", cudnn_attention, 64},
+    {"libtorch_feedforward", libtorch_feedforward, 64},
+    {"libtorch_convolution", libtorch_convolution, 16}
 };
 const Entry* find(const std::string& name) {
     for (const auto& e : entries) if (name == e.name) return &e;
@@ -49,6 +51,8 @@ Selection parse(const std::string& spec) {
     if (parts[0] == "cudnn_convolution") max_size=128;
     if (parts[0] == "cudnn_layernorm") { max_size=4096; multiple=8; }
     if (parts[0] == "cudnn_attention") { max_size=512; multiple=64; }
+    if (parts[0] == "libtorch_feedforward") max_size=512;
+    if (parts[0] == "libtorch_convolution") max_size=128;
     if (values[0] % multiple) throw std::invalid_argument("Unsupported cuDNN size alignment: " + spec);
     if (!values[0] || values[0] > max_size || !values[1] || values[1] > 1000000 ||
         !values[2] || values[2] > 1000000 || values[3] > UINT32_MAX)
