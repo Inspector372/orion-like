@@ -52,6 +52,9 @@ cuGetProcAddress_t real_cuGetProcAddress_v2 = NULL;
 void* (*real_dlsym)(void*, const char*) = NULL;
 void* cu_handle = NULL;
 
+// variable for identifying if current launch is from cudaLaunchKernel(), or separate mechanism.
+bool cudaLaunchKernel_launched[THREAD_NUM];
+
 
 
 
@@ -157,10 +160,15 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	}
 	int idx = get_idx();
 	fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
+	cudaLaunchKernel_launched[idx] = true;
 	pthread_mutex_lock(table_mutex);
 	cudaError_t err = real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
+	pthread_mutex_unlock(table_mutex);
+	cudaLaunchKernel_launched[idx] = false;
+	fprintf(stderr, "[cudaHook] block-start from %d!\n", idx);
+	block(idx, work_queue_mutex, work_queue);
+	fprintf(stderr, "[cudaHook] block-end from %d!\n", idx);
 	
-	fprintf(stderr, "[cudaHook] launch finished from %d!\n", idx);
 	return err;
 }
 
@@ -255,10 +263,6 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 		fprintf(stderr, "[cuHook] no-hook launch of %p\n", f);
 		return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
 	}
-	// TODO: wary about situation that the execution stops at cudaLaunchKernel();
-	// or cuLaunchKernel();
-	// where this mutex must be unlocked separately.
-	pthread_mutex_unlock(table_mutex);
 
 	fprintf(stderr, "[cuHook] caught call from someone!\n");
 	int idx = get_idx();
@@ -299,9 +303,11 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 
 	pthread_mutex_unlock(work_queue_mutex[idx]);
 	
-	fprintf(stderr, "[cuHook] block-start from %d!\n", idx);
-	block(idx, work_queue_mutex, work_queue);
-	fprintf(stderr, "[cuHook] block-end from %d!\n", idx);
+	if(!cudaLaunchKernel_launched[idx]) {
+		fprintf(stderr, "[cuHook] block-start from %d!\n", idx);
+		block(idx, work_queue_mutex, work_queue);
+		fprintf(stderr, "[cuHook] block-end from %d!\n", idx);
+	}
 
     return err;
 
