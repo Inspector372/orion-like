@@ -1,4 +1,5 @@
 # Optional cuDNN C++ Frontend workloads (headers from NVIDIA/cudnn-frontend v1.9.0).
+CXX=g++-10
 ENABLE_CUDNN ?= 0
 CUDNN_FRONTEND_DIR ?= ../cudnn-frontend
 CUDNN_INCLUDE_DIR ?= /usr/include/x86_64-linux-gnu
@@ -13,7 +14,7 @@ endif
 
 # Optional CUDA LibTorch distribution, alongside this project. No CMake needed.
 ENABLE_LIBTORCH ?= 0
-LIBTORCH_DIR ?= ../libtorch
+LIBTORCH_DIR ?= ../libtorch-cu126/libtorch
 # Read the package ABI flag when provided; modern cxx11 packages default to 1.
 LIBTORCH_CXX11_ABI ?= $(or $(shell sed -n 's/.*_GLIBCXX_USE_CXX11_ABI=\([01]\).*/\1/p' "$(LIBTORCH_DIR)/share/cmake/Torch/TorchConfig.cmake" 2>/dev/null | head -n 1),1)
 LIBTORCH_OBJECTS := testcase/libtorch_feedforward.o testcase/libtorch_convolution.o
@@ -21,7 +22,7 @@ ifeq ($(ENABLE_LIBTORCH),1)
 ABI_FLAGS = -D_GLIBCXX_USE_CXX11_ABI=$(LIBTORCH_CXX11_ABI)
 LIBTORCH_CPPFLAGS = -DORION_ENABLE_LIBTORCH=1 -I$(LIBTORCH_DIR)/include -I$(LIBTORCH_DIR)/include/torch/csrc/api/include
 LIBTORCH_LIBS = -L$(LIBTORCH_DIR)/lib -Xlinker -rpath -Xlinker $(abspath $(LIBTORCH_DIR)/lib) -Xlinker --no-as-needed -ltorch -ltorch_cuda -ltorch_cpu -lc10_cuda -lc10 -Xlinker --as-needed
-LIBTORCH_LINK_FLAGS = -std=c++17
+LIBTORCH_LINK_FLAGS = -std=c++20
 else
 LIBTORCH_CPPFLAGS = -DORION_ENABLE_LIBTORCH=0
 endif
@@ -38,7 +39,7 @@ libsmctrl.a:
 	ar rcs libsmctrl.a libsmctrl.o
 
 hooking.so: hooking.cpp hooking.h
-	g++ $(ABI_FLAGS) -fPIC hooking.cpp -o hooking.so -shared -ldl -I/usr/local/cuda-12.8/include
+	g++-10 $(ABI_FLAGS) -fPIC hooking.cpp -o hooking.so -shared -ldl -I/usr/local/cuda-12.8/include
 
 # -G option is important, this ignores some compiler optimization,
 # which leads to failure of kernel-inside-kernel launch.
@@ -50,7 +51,7 @@ testcase/%.o: testcase/%.cu testcase/testcase.h testcase/common.cuh
 	nvcc $(ABI_FLAGS) -arch=sm_70 -c $< -o $@
 
 testcase/registry.o: testcase/registry.cpp testcase/testcase.h
-	g++ $(ABI_FLAGS) -std=c++11 -c $< -o $@
+	g++-10 $(ABI_FLAGS) -std=c++20 -c $< -o $@
 
 testcase/cublaslt_matmul.o testcase/cublaslt_chained.o: testcase/cublaslt_common.cuh
 
@@ -74,7 +75,7 @@ $(LIBTORCH_OBJECTS): testcase/%.o: testcase/%.cpp testcase/libtorch_common.h tes
 ifeq ($(ENABLE_LIBTORCH),1)
 	@test -f "$(LIBTORCH_DIR)/include/ATen/ATen.h" -a -f "$(LIBTORCH_DIR)/lib/libtorch_cuda.so" || (echo "Set LIBTORCH_DIR to a CUDA-enabled LibTorch distribution"; exit 1)
 endif
-	$(CXX) $(CXXFLAGS) -std=c++17 -pthread $(ABI_FLAGS) $(LIBTORCH_CPPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -std=c++20 -pthread $(ABI_FLAGS) $(LIBTORCH_CPPFLAGS) -c $< -o $@
 
 # All C++ objects exchanging testcase::Result/std::string must use the same ABI.
 # Update the stamp only when settings change, so LibTorch is not rebuilt on
