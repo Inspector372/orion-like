@@ -232,6 +232,9 @@ compiled by g++ and linked into the same `threading` executable.
 
 ## TODO
 
-Queueing of Device-to-Device memcpy, and look other implicit kernel calls
+Hooking every cuMemcpy/cuMemset-type calls
+
 MemsetAsync to 'truly' asynchronous
+
+CudaGraph hook implementation
 

@@ -1,5 +1,5 @@
 # Optional cuDNN C++ Frontend workloads (headers from NVIDIA/cudnn-frontend v1.9.0).
-CXX=g++-10
+CXX=g++-12
 ENABLE_CUDNN ?= 0
 CUDNN_FRONTEND_DIR ?= ../cudnn-frontend
 CUDNN_INCLUDE_DIR ?= /usr/include/x86_64-linux-gnu

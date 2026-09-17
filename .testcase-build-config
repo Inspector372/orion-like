@@ -1,6 +1,0 @@
-1
--DORION_ENABLE_LIBTORCH=1 -I../libtorch-cu126/libtorch/include -I../libtorch-cu126/libtorch/include/torch/csrc/api/include
--D_GLIBCXX_USE_CXX11_ABI=1
--L../libtorch-cu126/libtorch/lib -Xlinker -rpath -Xlinker /home/kechoi/libtorch-cu126/libtorch/lib -Xlinker --no-as-needed -ltorch -ltorch_cuda -ltorch_cpu -lc10_cuda -lc10 -Xlinker --as-needed
-g++-10
-
