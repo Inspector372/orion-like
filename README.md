@@ -241,11 +241,11 @@ compiled by g++ and linked into the same `threading` executable.
 
 ## TODO
 
-Hooking every cuMemcpy/cuMemset-type calls
+Table modification - removing entry in OS side
 
-MemsetAsync to 'truly' asynchronous
+Hooking every cuMemcpy/cuMemset-type calls & MemsetAsync to 'truly' asynchronous
 
 Python frontend support
 
-CudaGraph hook implementation
+CudaGraph hook implementation(parallel)
 

@@ -52,6 +52,10 @@ void table_insert(uint64_t key, AtomMetaData value) {
 
 }
 
+void table_clear(uint64_t key) {
+
+}
+
 /*
     Kernel wrapper.
     
@@ -67,7 +71,8 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu) {
     int i;
     for(i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable[idx].key == ptr) {
-            atomMetaDataTable[idx].key = 0;
+            // This is better not be here, and we need table_clear (queueing) after the execution is **done**.
+            // This is just a trick such that tracks the 'last block' to be executed.
             break;
         }
         idx = (idx + 1) % MAP_LENGTH;
@@ -79,6 +84,9 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu) {
 
     size_t block_idx = blockIdx.z * gridDim.y * gridDim.x + blockIdx.y * gridDim.x + blockIdx.x;
     if (block_idx < lidx || block_idx >= hidx) return;
+
+    if(block_idx == lidx) 
+        atomMetaDataTable[idx].key = 0;
 
     ((func_ptr_t)kernel)();
 } 
