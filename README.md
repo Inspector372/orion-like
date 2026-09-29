@@ -1,5 +1,14 @@
 # Orion-like
 
+## Environments
+
+CUDA - 12.8
+
+Architecture - GeForce RTX 3090
+
+g++ - 11 or 13
+
+
 ## Testcases
 
 Each `.cu` file defines kernels and one complete host workload declared in
@@ -235,6 +244,10 @@ compiled by g++ and linked into the same `threading` executable.
 Hooking every cuMemcpy/cuMemset-type calls
 
 MemsetAsync to 'truly' asynchronous
+
+Implementing multiple testcases in a single run
+
+Python frontend support
 
 CudaGraph hook implementation
 
