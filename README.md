@@ -245,8 +245,6 @@ Hooking every cuMemcpy/cuMemset-type calls
 
 MemsetAsync to 'truly' asynchronous
 
-Implementing multiple testcases in a single run
-
 Python frontend support
 
 CudaGraph hook implementation
