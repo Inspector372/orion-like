@@ -241,8 +241,6 @@ compiled by g++ and linked into the same `threading` executable.
 
 ## TODO
 
-Table modification - removing entry in OS side
-
 Hooking every cuMemcpy/cuMemset-type calls & MemsetAsync to 'truly' asynchronous
 
 Python frontend support

@@ -1,9 +1,0 @@
-0
--DORION_ENABLE_LIBTORCH=0
-
-
-g++-12
-
-g++-12
-c++17
-
