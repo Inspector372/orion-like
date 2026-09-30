@@ -53,7 +53,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
     cudaEvent_t copy;
     cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
 
-    // fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
+    fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
     
     // check if the entry is already there!
     for(int i = 0; i < MAP_LENGTH; i++) {
@@ -164,6 +164,7 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu) {
     uint32_t hidx = atomMetaDataTable[idx].hidx;
 
     size_t block_idx = blockIdx.z * gridDim.y * gridDim.x + blockIdx.y * gridDim.x + blockIdx.x;
+    if(threadIdx.x + blockIdx.x * blockDim.x == 1) printf("lidx : %d, hidx : %d\n", lidx, hidx);
     if (block_idx < lidx || block_idx >= hidx) return;
 
     ((func_ptr_t)kernel)();
