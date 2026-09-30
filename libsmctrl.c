@@ -62,6 +62,7 @@ uint32_t launch_lidx;
 uint32_t launch_hidx;
 uint32_t launch_signal;
 uint32_t callback_mode = 0;
+uint64_t last_key;
 
 
 /*
@@ -574,6 +575,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		metadata.kernel = program_addr;
 		metadata.lidx = launch_lidx;
 		metadata.hidx = launch_hidx;
+		last_key = buffer_addr + 0x160;
 		hash_insert_callback(buffer_addr + 0x160, metadata);
 		
 		*upper_ptr = wrapper_progaddr_upper;

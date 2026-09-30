@@ -77,8 +77,20 @@ typedef struct scheduler_arg {
 
 
 void hash_insert(uint64_t key, AtomMetaData value) {
+	if(key == 0) {
+		fprintf(stderr, "hash_insert: trying to insert a null key. returning.\n");
+	}
 	pthread_mutex_lock(&table_mutex);
 	table_insert(key, value);
+	pthread_mutex_unlock(&table_mutex);
+}
+
+void hash_delete(uint64_t key, AtomMetaData value) {
+	if(key == 0) {
+		fprintf(stderr, "hash_delete: trying to delete a null key. returning.\n");
+	}
+	pthread_mutex_lock(&table_mutex);
+	table_delete(key);
 	pthread_mutex_unlock(&table_mutex);
 }
 
@@ -228,6 +240,18 @@ void* scheduler(void* scarg) {
     fprintf(stderr, "scheduler init...\n");
 
     while (true) {
+		// reap every possible event in the release queue, and call hash_delete.
+		for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
+			if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
+				if(!release_queue[i].reaped) table_delete(release_queue[i].key);
+				cudaEventDestroy(release_queue[i].event);
+				release_queue[i].key = 0;
+            	release_queue[i].event = 0;
+            	release_queue[i].reaped = false;
+			}
+		}
+
+
         // Clients synchronize before returning. Once every producer has finished,
         // drain all records before stopping. Use an external timeout for hangs.
         if (clients_done.load() == THREAD_NUM) {
@@ -246,15 +270,22 @@ void* scheduler(void* scarg) {
 
 			switch(qrecord.type) {
 				case RECORD_CULAUNCHKERNEL: {
-					fprintf(stderr, "scheduler found job of #%d\n", turn);
 					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
+					fprintf(stderr, "scheduler found pending job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
 					// TODO: how to pass status?
 					launch_lidx = record.lidx;
 					launch_hidx = record.hidx;
 					launch_signal = 1;
+
+					cudaEvent_t launch_finish_event;
+					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
+
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
+					release_queue_insert(last_key, launch_finish_event);
+
 					(*work_queue[turn]).pop();
-					fprintf(stderr, "scheduler finish assigning job of #%d\n", turn);
+					fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
 
 				}
 				break;
