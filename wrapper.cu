@@ -74,6 +74,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
             cudaMemcpyToSymbolAsync(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream);
             cudaEventRecord(copy, metadata_pass_stream);
             cudaEventSynchronize(copy);
+            break;
         }
         idx = (idx + 1) % MAP_LENGTH;
     }
@@ -120,7 +121,7 @@ void release_queue_insert(uint64_t key, cudaEvent_t event) {
 
 void release_queue_mark_as_reaped(uint64_t key) {
     for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
-        if(release_queue[i].key == key) {
+        if(release_queue[i].key == key && !release_queue[i].reaped) {
             release_queue[i].reaped = true;
             return;
         }
