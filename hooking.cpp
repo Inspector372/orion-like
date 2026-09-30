@@ -118,6 +118,7 @@ extern "C" {
 	and wait until it gets scheduled and eventually finished.
 	this works because one thread(user) got only one thread. 
 */
+/*
 cudaError_t cudaDeviceSynchronize(void) {
 	
 	cudaEvent_t event;
@@ -143,6 +144,7 @@ cudaError_t cudaDeviceSynchronize(void) {
 	cudaEventDestroy(event);
 	return cudaSuccess;
 }
+*/
 
 /*
 	Hook for cudaLaunchKernel, ... etc
