@@ -1,4 +1,5 @@
 #include "common.cuh"
+#include <string>
 namespace {
 __global__ void visit(unsigned* out, std::size_t n) {
     std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -15,8 +16,16 @@ testcase::Result testcase::coverage(const Config& c) {
     }
     finish();
     check(cudaMemcpy(h.data(), d.ptr, c.size * sizeof(unsigned), cudaMemcpyDeviceToHost));
-    bool ok = true;
-    for (auto value : h) ok &= value == static_cast<unsigned>(c.iterations);
     d.release();
-    return {ok, ok ? "Each logical thread executed exactly once per repetition" : "Missing or duplicated execution"};
+    const unsigned expected = static_cast<unsigned>(c.iterations);
+    for (std::size_t i = 0; i < c.size; ++i) {
+        if (h[i] != expected) {
+            return {false, "Coverage first mismatch at index " + std::to_string(i) +
+                " (block " + std::to_string(i / 256) +
+                ", thread " + std::to_string(i % 256) +
+                "): expected=" + std::to_string(expected) +
+                ", actual=" + std::to_string(h[i])};
+        }
+    }
+    return {true, "Each logical thread executed exactly once per repetition"};
 }

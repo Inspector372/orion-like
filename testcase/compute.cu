@@ -1,4 +1,5 @@
 #include "common.cuh"
+#include <string>
 namespace {
 __host__ __device__ unsigned recurrence(unsigned x, int work) {
     for (int k = 0; k < work; ++k) x = (x * 1664525u + 1013904223u) ^ (x >> 7);
@@ -19,8 +20,16 @@ testcase::Result testcase::compute(const Config& c) {
     }
     finish();
     check(cudaMemcpy(out.data(), d.ptr, c.size * sizeof(unsigned), cudaMemcpyDeviceToHost));
-    bool ok = true;
-    for (std::size_t i = 0; i < c.size; ++i) ok &= out[i] == recurrence(static_cast<unsigned>(i) + c.seed, c.work);
     d.release();
-    return {ok, ok ? "Compute recurrence verified" : "Compute mismatch"};
+    for (std::size_t i = 0; i < c.size; ++i) {
+        const unsigned expected = recurrence(static_cast<unsigned>(i) + c.seed, c.work);
+        if (out[i] != expected) {
+            return {false, "Compute first mismatch at index " + std::to_string(i) +
+                " (block " + std::to_string(i / 256) +
+                ", thread " + std::to_string(i % 256) +
+                "): expected=" + std::to_string(expected) +
+                ", actual=" + std::to_string(out[i])};
+        }
+    }
+    return {true, "Compute recurrence verified"};
 }
