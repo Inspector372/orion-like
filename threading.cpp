@@ -80,12 +80,13 @@ void hash_insert(uint64_t key, AtomMetaData value) {
 	if(key == 0) {
 		fprintf(stderr, "hash_insert: trying to insert a null key. returning.\n");
 	}
+	/* Problem: This can be INSIDE work_queue_mutex critical section, which will cause deadlock */
 	pthread_mutex_lock(&table_mutex);
 	table_insert(key, value);
 	pthread_mutex_unlock(&table_mutex);
 }
 
-void hash_delete(uint64_t key, AtomMetaData value) {
+void hash_delete(uint64_t key) {
 	if(key == 0) {
 		fprintf(stderr, "hash_delete: trying to delete a null key. returning.\n");
 	}
@@ -243,7 +244,7 @@ void* scheduler(void* scarg) {
 		// reap every possible event in the release queue, and call hash_delete.
 		for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
 			if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
-				if(!release_queue[i].reaped) table_delete(release_queue[i].key);
+				if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
 				cudaEventDestroy(release_queue[i].event);
 				release_queue[i].key = 0;
             	release_queue[i].event = 0;
