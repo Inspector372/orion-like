@@ -285,25 +285,7 @@ void* scheduler(void* scarg) {
 					cudaEvent_t launch_finish_event;
 					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
 
-					// This section is renewing kernelParams argument.
-					// CUDA seems like to allocate the same entry for the same structure of kernelParams,
-					// so we try to make same structure of kernelParams, but with different address so CUDA won't do such optimization.
-					// This could be GPU-side memory overhead. 
-					size_t param_cnt = 0;
-					size_t paramOffset, paramSize;
-					while((*actual_cuFuncGetParamInfo)(record.f, param_cnt, &paramOffset, &paramSize) == CUDA_SUCCESS) {
-						param_cnt++;
-					}
-					void* args[100];
-					uint64_t arglist[100];
-					for(int j=0; j<param_cnt; j++) {
-						arglist[j] = *((uint64_t *)record.kernelParams[j]);
-						args[j] = &arglist[j];
-					}
-					arglist[1] += record.lidx;
-
-
-					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], args, record.extra);
+					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
 					release_queue_insert(last_key, launch_finish_event);
 

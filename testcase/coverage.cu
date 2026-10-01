@@ -3,9 +3,6 @@
 namespace {
 __global__ void visit(unsigned* out, std::size_t n) {
     std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i % (256 * 2930) == 1) {
-        printf("size check: %d\n", n);
-    }
     if (i < n) atomicAdd(out + i, 1u);
 }
 }

@@ -1,5 +1,5 @@
 
-#define THREAD_NUM 5
+#define THREAD_NUM 9
 
 enum record_type {
 	RECORD_CULAUNCHKERNEL,

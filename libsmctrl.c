@@ -547,6 +547,9 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
 	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
 
+	// suspected gridid.
+	uint64_t grid_id = (uint64_t)(*((uint64_t*)in_params + 7) + 0);
+
 	// (*buffer_start) & 0x0001ffffffffffff is actual constant buffer address, since it's 49 bits long.
 	uint64_t *buffer_start = (uint16_t*)(**((char***)in_params + 8) + 128);
 
@@ -571,12 +574,21 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		uint64_t buffer_addr = (*buffer_start) & 0x0001ffffffffffff;
 		
 		AtomMetaData_t metadata;
-		metadata.key = buffer_addr + 0x160;
+		// metadata.key = buffer_addr + 0x160;
+		metadata.key = grid_id;
 		metadata.kernel = program_addr;
 		metadata.lidx = launch_lidx;
 		metadata.hidx = launch_hidx;
-		last_key = buffer_addr + 0x160;
-		hash_insert_callback(buffer_addr + 0x160, metadata);
+		// last_key = buffer_addr + 0x160;
+		last_key = grid_id;
+		// hash_insert_callback(buffer_addr + 0x160, metadata);
+		hash_insert_callback(grid_id, metadata);
+
+		/*for(int i=0; i<9; i++) {
+			uint32_t *qmd_start_ptr = (uint32_t*)(*((char***)in_params + i) + 0);
+			fprintf(stderr, "[libsmctrl] af offset %d: %lx\n", i, qmd_start_ptr);
+		}
+		fprintf(stderr, "lidx: %d, hidx: %d, domain: %d, cbid: %d\n", launch_lidx, launch_hidx, domain, cbid);*/
 		
 		*upper_ptr = wrapper_progaddr_upper;
 		*lower_ptr = wrapper_progaddr_lower;

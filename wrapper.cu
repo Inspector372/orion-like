@@ -53,7 +53,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
     cudaEvent_t copy;
     cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
 
-    fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
+    // fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
     
     // check if the entry is already there!
     for(int i = 0; i < MAP_LENGTH; i++) {
@@ -148,12 +148,17 @@ void release_queue_delete(uint64_t key) {
 __global__ void wrapper(const __grid_constant__ uint64_t argu) {
     if(argu == MAGIC) return; // For initial_wrapper_run().
 
-    uint64_t ptr = (uint64_t)&argu;
-    uint64_t idx = (ptr * 11400714819323198485ULL) % MAP_LENGTH;
+    // uint64_t ptr = (uint64_t)&argu;
+    // uint64_t idx = (ptr * 11400714819323198485ULL) % MAP_LENGTH;
+    uint64_t gid;
+    asm volatile("mov.u64 %0, %%gridid;" : "=l"(gid));
+    uint64_t idx = (gid * 11400714819323198485ULL) % MAP_LENGTH;
+    
+
 
     int i;
     for(i = 0; i < MAP_LENGTH; i++) {
-        if(atomMetaDataTable[idx].key == ptr) {
+        if(atomMetaDataTable[idx].key == gid) {
             break;
         }
         idx = (idx + 1) % MAP_LENGTH;
@@ -164,7 +169,7 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu) {
     uint32_t hidx = atomMetaDataTable[idx].hidx;
 
     size_t block_idx = blockIdx.z * gridDim.y * gridDim.x + blockIdx.y * gridDim.x + blockIdx.x;
-    if(threadIdx.x + blockIdx.x * blockDim.x == 1) printf("lidx : %d, hidx : %d\n", lidx, hidx);
+    // if(threadIdx.x + blockIdx.x * blockDim.x == 1) printf("key : %lx, lidx : %d, hidx : %d\n", gid, lidx, hidx);
     if (block_idx < lidx || block_idx >= hidx) return;
 
     ((func_ptr_t)kernel)();
