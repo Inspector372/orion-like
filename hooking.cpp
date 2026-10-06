@@ -1,5 +1,17 @@
 /*
 	hooking.cpp
+
+	There are APIs which need to be hooked in device-level,
+	and APIs which is okay to be hooked in runtime-level.
+	Device Management(Driver Only): cuFlushGPUDirectRDMAWrites() is a blocking API, otherwise no hooking is needed.
+	Context Management: 
+	
+	Device-level hooking:
+
+	Runtime-level hooking:
+
+	No hooking:
+
 	
 */
 
