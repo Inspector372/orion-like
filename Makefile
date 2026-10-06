@@ -67,7 +67,7 @@ threading: threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o
 	nvcc $(ABI_FLAGS) $(LIBTORCH_LINK_FLAGS) -G -g -Xcompiler -pthread threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o -o threading -ldl -L/usr/local/cuda-12.8/lib64 -lcudart -lcuda -lcublasLt $(CUDNN_LIBS) $(LIBTORCH_LIBS) -L/usr/local/cuda-12.8/lib64/stubs
 
 clean:
-	rm -f libsmctrl.o libsmctrl.a hooking.so wrapper.o threading.o threading testcase/*.o .testcase-build-config .testcase-build-config.tmp
+	rm -f libsmctrl.o libsmctrl.a hooking.so wrapper.o threading.o threading context_thread testcase/*.o .testcase-build-config .testcase-build-config.tmp
 
 # Rebuild these four objects when switching optional dependency settings.
 .PHONY: cudnn-force
@@ -103,3 +103,8 @@ testcase-config-force:
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(TEST_OBJECTS) wrapper.o hooking.so threading: .testcase-build-config
+
+# Standalone Driver API context diagnostic (embedded PTX; no nvcc required).
+CUDA_HOME ?= /usr/local/cuda-12.8
+context_thread: testcase/context_thread.cpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -std=c++11 -pthread -I$(CUDA_HOME)/include $< -o $@ $(LDFLAGS) -L$(CUDA_HOME)/lib64 -L$(CUDA_HOME)/lib64/stubs -lcuda $(LDLIBS)
