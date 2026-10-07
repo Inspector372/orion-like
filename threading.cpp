@@ -271,9 +271,9 @@ void* scheduler(void* scarg) {
 		// pop one from queue, and assign.
 		pthread_mutex_lock(work_queue_mutex[turn]);
 		if(!(*work_queue[turn]).empty()) {
-			queue_record qrecord_ref = (*work_queue[turn]).front();
-			queue_record qrecord = qrecord_ref;
-			(*work_queue[turn]).pop();
+			// We should delay popping until the end of the execution,
+			// otherwise the client will proceed and may invaildate some arguments.
+			queue_record qrecord = (*work_queue[turn]).front();
 			pthread_mutex_unlock(work_queue_mutex[turn]);
 
 			switch(qrecord.type) {
@@ -331,6 +331,10 @@ void* scheduler(void* scarg) {
 				fprintf(stderr, "Error: unknown record type\n");
                     std::exit(EXIT_FAILURE);
 			}
+			pthread_mutex_lock(work_queue_mutex[turn]);
+			(*work_queue[turn]).pop();
+			pthread_mutex_unlock(work_queue_mutex[turn]);
+
 
 		} else {
 			pthread_mutex_unlock(work_queue_mutex[turn]);
