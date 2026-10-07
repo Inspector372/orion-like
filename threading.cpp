@@ -271,12 +271,15 @@ void* scheduler(void* scarg) {
 		// pop one from queue, and assign.
 		pthread_mutex_lock(work_queue_mutex[turn]);
 		if(!(*work_queue[turn]).empty()) {
-			queue_record qrecord = (*work_queue[turn]).front();
+			queue_record qrecord_ref = (*work_queue[turn]).front();
+			queue_record qrecord = qrecord_ref;
+			(*work_queue[turn]).pop();
+			pthread_mutex_unlock(work_queue_mutex[turn]);
 
 			switch(qrecord.type) {
 				case RECORD_CULAUNCHKERNEL: {
 					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
-					fprintf(stderr, "scheduler found pending job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
+					// fprintf(stderr, "scheduler found pending job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
 					// TODO: how to pass status?
 					launch_lidx = record.lidx;
 					launch_hidx = record.hidx;
@@ -288,42 +291,39 @@ void* scheduler(void* scarg) {
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
 					release_queue_insert(last_key, launch_finish_event);
-
-					(*work_queue[turn]).pop();
-					fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
+					// fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
 
 				}
 				break;
 
 				case RECORD_CUDAEVENT: {
 					record_cudaEvent record_event = qrecord.data.r_cudaEvent;
-					fprintf(stderr, "event recorded for #%d\n", turn);
+					// fprintf(stderr, "event recorded for #%d\n", turn);
 					if (cudaEventRecord(record_event.event, *sched_streams[turn]) != cudaSuccess) {
-                        fprintf(stderr, "Scheduler event record failed\n");
+                        // fprintf(stderr, "Scheduler event record failed\n");
                         std::exit(EXIT_FAILURE);
                     }
-					(*work_queue[turn]).pop();
 				}
 				break;
 
 				case RECORD_CUDAMEMSET: {
 					record_cudaMemset record_event = qrecord.data.r_cudaMemset;
+
 					if (actual_cudaMemset(record_event.devPtr, record_event.value, record_event.count) != cudaSuccess) {
                         fprintf(stderr, "Scheduler memset record failed\n");
                         std::exit(EXIT_FAILURE);
                     }
-					(*work_queue[turn]).pop();
 				}
 				break;
 
 				case RECORD_CUDAMEMSETASYNC: {
 					// We use synchronous version... for now.
 					record_cudaMemsetAsync record_event = qrecord.data.r_cudaMemsetAsync;
+
 					if (actual_cudaMemset(record_event.devPtr, record_event.value, record_event.count) != cudaSuccess) {
                         fprintf(stderr, "Scheduler memsetAsync record failed\n");
                         std::exit(EXIT_FAILURE);
                     }
-					(*work_queue[turn]).pop();
 				}
 				break;
 
@@ -332,8 +332,9 @@ void* scheduler(void* scarg) {
                     std::exit(EXIT_FAILURE);
 			}
 
+		} else {
+			pthread_mutex_unlock(work_queue_mutex[turn]);
 		}
-		pthread_mutex_unlock(work_queue_mutex[turn]);
 		turn = (turn + 1) % THREAD_NUM;
 	}
 

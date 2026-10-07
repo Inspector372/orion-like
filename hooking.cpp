@@ -3,14 +3,28 @@
 
 	There are APIs which need to be hooked in device-level,
 	and APIs which is okay to be hooked in runtime-level.
-	Device Management(Driver Only): cuFlushGPUDirectRDMAWrites() is a blocking API, otherwise no hooking is needed.
-	Context Management: 
+	* NO HOOK * Device Management: cuFlushGPUDirectRDMAWrites() is a blocking API, otherwise no hooking is needed.
+	* NO HOOK * Context Management(Driver): The hooking itself is not a big deal, but launching in OS thread will struggle to give its error state, etc... to user thread.
+											For now just leave it as no hooking.
+	* NO HOOK * Module Management(Driver): 	If a tenant loads a module, then the OS must be able to use it(because hooking is ultimately coming to OS).
+											This might need hooking the whole API.
+											For now just leave it as no hooking.
+	* NO HOOK * Library Management(Driver): Almost asme as module management part.
+											One thing is there are some functions that feeds configuration to kernels,
+											but need to think if OS should ignore such user-level configurations.
+											For now just leave it as no hooking.
+	* NO HOOK * Error Handling:				This will be implemented later with error queue for clients.
+	* DEVICE HOOK * Memory Management:		Need to be hooked, and need to be distinguished.
+											The top design is differtiantiate between 'pure-memory' operation and 'kernel-may-involved' operations.
+											I want to make a separate work queue dealing with only memory operations because that is how CUDA works.
+											As mentioned earlier, some operations like cudaMemset() or cudaMemcpy(..., DtoD) involves kernel launch, so they need to be treated like kernel launch.
+	* NO HOOK * Stream & Event Management: 	Currently, we ignore the stream and put everything to our stream,
+											However, when events and syncrhonizations are involved, we need to hook events.
+											Will be implemented later after all basic operations are done.
 	
-	Device-level hooking:
+	Cooperative Launch: 					Later.
 
-	Runtime-level hooking:
-
-	No hooking:
+	Graph Management:						Later.
 
 	
 */
@@ -201,7 +215,6 @@ cudaError_t cudaMemset(void* devPtr, int value, size_t count) {
             fprintf(stderr, "FATAL ERROR: real_cudaMemset == NULL\n");
         }
     }
-	fprintf(stderr, "[cudaMemsetHook] hooked from someone!\n");
 	int idx = get_idx();
 	fprintf(stderr, "[cudaMemsetHook] hooked from %d!\n", idx);
 
@@ -233,7 +246,6 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t 
             fprintf(stderr, "FATAL ERROR: real_cudaMemsetAsync == NULL\n");
         }
     }
-	fprintf(stderr, "[cudaMemsetAsyncHook] hooked from someone!\n");
 	int idx = get_idx();
 	fprintf(stderr, "[cudaMemsetAsyncHook] hooked from %d!\n", idx);
 
@@ -279,7 +291,6 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 		return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
 	}
 
-	fprintf(stderr, "[cuHook] caught call from someone!\n");
 	int idx = get_idx();
 	fprintf(stderr, "[cuHook] caught call from %d!\n", idx);
 
