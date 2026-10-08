@@ -50,8 +50,11 @@ void table_insert(uint64_t key, AtomMetaData value) {
     uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
     AtomMetaData metadata;
 
-    cudaEvent_t copy;
-    cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
+    CUevent copy;
+    cuEventCreate(&copy, CU_EVENT_DISABLE_TIMING);
+
+    // cudaEvent_t copy;
+    // cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
 
     // fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
     
@@ -60,10 +63,13 @@ void table_insert(uint64_t key, AtomMetaData value) {
         if(atomMetaDataTable_cache[i].key == key) {
             atomMetaDataTable_cache[i] = value;
             cudaMemcpyToSymbolAsync(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * i, cudaMemcpyHostToDevice, metadata_pass_stream);
-            cudaEventRecord(copy, metadata_pass_stream);
-            cudaEventSynchronize(copy);
+            cuEventRecord(copy, metadata_pass_stream);
+            cuEventSynchronize(copy);
+            //cudaEventRecord(copy, metadata_pass_stream);
+            //cudaEventSynchronize(copy);
             release_queue_mark_as_reaped(key);
-            cudaEventDestroy(copy);
+            cuEventDestroy(copy);
+            //cudaEventDestroy(copy);
             return;
         }
     }
@@ -72,13 +78,16 @@ void table_insert(uint64_t key, AtomMetaData value) {
         if(atomMetaDataTable_cache[idx].key == 0) {
             atomMetaDataTable_cache[idx] = value;
             cudaMemcpyToSymbolAsync(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream);
-            cudaEventRecord(copy, metadata_pass_stream);
-            cudaEventSynchronize(copy);
+            cuEventRecord(copy, metadata_pass_stream);
+            cuEventSynchronize(copy);
+            // cudaEventRecord(copy, metadata_pass_stream);
+            // cudaEventSynchronize(copy);
             break;
         }
         idx = (idx + 1) % MAP_LENGTH;
     }
-    cudaEventDestroy(copy);
+    cuEventDestroy(copy);
+    // cudaEventDestroy(copy);
     return;
 
 }
@@ -88,20 +97,25 @@ void table_delete(uint64_t key) {
     AtomMetaData metadata;
     metadata.key = 0;
 
-    cudaEvent_t copy;
-    cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
+    CUevent copy;
+    cuEventCreate(&copy, CU_EVENT_DISABLE_TIMING);
+    // cudaEvent_t copy;
+    // cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
     
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == key) {
             atomMetaDataTable_cache[idx].key = 0;
             cudaMemcpyToSymbolAsync(atomMetaDataTable, &metadata, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream);
-            cudaEventRecord(copy, metadata_pass_stream);
-            cudaEventSynchronize(copy);
+            cuEventRecord(copy, metadata_pass_stream);
+            cuEventSynchronize(copy);
+            // cudaEventRecord(copy, metadata_pass_stream);
+            // cudaEventSynchronize(copy);
             break;
         }
         idx = (idx + 1) % MAP_LENGTH;
     }
-    cudaEventDestroy(copy);
+    cuEventDestroy(copy);
+    // cudaEventDestroy(copy);
     return;
 }
 

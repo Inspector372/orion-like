@@ -1,4 +1,4 @@
-#define RELEASE_QUEUE_LENGTH 2048
+#define RELEASE_QUEUE_LENGTH 16384
 
 typedef struct AtomMetaData {
     uint64_t key;
