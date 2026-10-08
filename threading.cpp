@@ -82,9 +82,9 @@ void hash_insert(uint64_t key, AtomMetaData value) {
 		fprintf(stderr, "hash_insert: trying to insert a null key. returning.\n");
 	}
 	/* Problem: This can be INSIDE work_queue_mutex critical section, which will cause deadlock */
-	pthread_mutex_lock(&table_mutex);
+	// pthread_mutex_lock(&table_mutex);
 	table_insert(key, value);
-	pthread_mutex_unlock(&table_mutex);
+	// pthread_mutex_unlock(&table_mutex);
 }
 
 void hash_delete(uint64_t key) {
@@ -288,7 +288,10 @@ void* scheduler(void* scarg) {
 					cudaEvent_t launch_finish_event;
 					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
 
+					pthread_mutex_lock(&table_mutex);
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+					pthread_mutex_unlock(&table_mutex);
+					
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
 					release_queue_insert(last_key, launch_finish_event);
 					// fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
