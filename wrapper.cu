@@ -13,7 +13,7 @@
 #include "wrapper.h"
 
 __device__ AtomMetaData atomMetaDataTable[MAP_LENGTH];
-AtomMetaData atomMetaDataTable_cache[MAP_LENGTH];
+AtomMetaData* atomMetaDataTable_cache;
 
 /*
     When a real_cuLaunchKernel launch happens, OS creates an event and saves (key, event) pair.
@@ -62,7 +62,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[i].key == key) {
             atomMetaDataTable_cache[i] = value;
-            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * i, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
+            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[i], sizeof(AtomMetaData), sizeof(AtomMetaData) * i, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
                 ;
             }
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
@@ -71,6 +71,11 @@ void table_insert(uint64_t key, AtomMetaData value) {
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
+                static int delete_k = 0;
+                delete_k++;
+                if(delete_k % 500 == 0) {
+                    fprintf(stderr, "deadlock check insert: %d, %d\n", status, delete_k);
+                }
             }
             // cuEventSynchronize(copy);
             //cudaEventRecord(copy, metadata_pass_stream);
@@ -85,7 +90,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == 0) {
             atomMetaDataTable_cache[idx] = value;
-            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &value, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
+            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
                 ;
             }
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
@@ -94,6 +99,11 @@ void table_insert(uint64_t key, AtomMetaData value) {
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
+                static int delete_k = 0;
+                delete_k++;
+                if(delete_k % 500 == 0) {
+                    fprintf(stderr, "deadlock check insert: %d, %d\n", status, delete_k);
+                }
             }
             // cuEventSynchronize(copy);
             // cudaEventRecord(copy, metadata_pass_stream);
@@ -124,11 +134,7 @@ void table_delete(uint64_t key) {
         if(atomMetaDataTable_cache[idx].key == key) {
             atomMetaDataTable_cache[idx].key = 0;
             cuEventRecord(before_copy, metadata_pass_stream);
-            for(;;) {
-                CUresult status = cuEventQuery(before_copy);
-                if (status == CUDA_SUCCESS) break;
-            }
-            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &metadata, sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
+            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
                 ;
             }
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
@@ -137,6 +143,11 @@ void table_delete(uint64_t key) {
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
+                static int delete_k = 0;
+                delete_k++;
+                if(delete_k % 500 == 0) {
+                    fprintf(stderr, "deadlock check delete: %d, %d\n", status, delete_k);
+                }
             }
             // cuEventSynchronize(copy);
             // cudaEventRecord(copy, metadata_pass_stream);
@@ -226,6 +237,7 @@ void setup_metadata() {
         zero_ptrs[i].key = 0;
     }
     cudaMemcpyToSymbol(atomMetaDataTable, &zero_ptrs, sizeof(zero_ptrs));
+    cudaMallocHost((void**)&atomMetaDataTable_cache, sizeof(AtomMetaData) * MAP_LENGTH);
 }
 
 
