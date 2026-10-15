@@ -4,7 +4,7 @@
     Defines wrapper.
 
 */ 
-#define MAP_LENGTH 1024
+#define MAP_LENGTH 2048
 #define MAGIC 0x2020064020200640ULL
 
 #include <stdio.h>
@@ -125,15 +125,12 @@ void table_delete(uint64_t key) {
 
     CUevent copy;
     cuEventCreate(&copy, CU_EVENT_DISABLE_TIMING);
-    CUevent before_copy;
-    cuEventCreate(&before_copy, CU_EVENT_DISABLE_TIMING);
     // cudaEvent_t copy;
     // cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
     
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == key) {
             atomMetaDataTable_cache[idx].key = 0;
-            cuEventRecord(before_copy, metadata_pass_stream);
             while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
                 ;
             }
