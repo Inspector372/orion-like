@@ -74,7 +74,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
                 static int delete_k = 0;
                 delete_k++;
                 if(delete_k % 500 == 0) {
-                    fprintf(stderr, "deadlock check insert: %d, %d\n", status, delete_k);
+                    fprintf(stderr, "deadlock check insert already: %d, %d\n", status, delete_k);
                 }
             }
             // cuEventSynchronize(copy);
@@ -83,6 +83,8 @@ void table_insert(uint64_t key, AtomMetaData value) {
             release_queue_mark_as_reaped(key);
             cuEventDestroy(copy);
             //cudaEventDestroy(copy);
+            fprintf(stderr, "this should not happen???\n");
+            std::exit(-1);
             return;
         }
     }
@@ -102,7 +104,19 @@ void table_insert(uint64_t key, AtomMetaData value) {
                 static int delete_k = 0;
                 delete_k++;
                 if(delete_k % 500 == 0) {
-                    fprintf(stderr, "deadlock check insert: %d, %d\n", status, delete_k);
+                    fprintf(stderr, "deadlock check insert new: %d, %d\n", status, delete_k);
+                }
+                if(delete_k > 1000000) {
+                    CUevent copy_2;
+                    cuEventCreate(&copy_2, CU_EVENT_DISABLE_TIMING);
+                    // cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[i], sizeof(AtomMetaData), sizeof(AtomMetaData) * i, cudaMemcpyHostToDevice, metadata_pass_stream);
+                    cuEventRecord(copy_2, metadata_pass_stream);
+                    for(;;) {
+                        CUresult status_2 = cuEventQuery(copy_2);
+                        if (status_2 == CUDA_SUCCESS) break;
+                        fprintf(stderr, "deadlock check insert twice\n");
+                    }
+                    std::exit(-1);
                 }
             }
             // cuEventSynchronize(copy);
@@ -170,6 +184,8 @@ void release_queue_insert(uint64_t key, cudaEvent_t event) {
             return;
         }
     }
+    fprintf(stderr, "release queue is full\n");
+    std::exit(-1);
 }
 
 void release_queue_mark_as_reaped(uint64_t key) {
@@ -235,6 +251,9 @@ void setup_metadata() {
     }
     cudaMemcpyToSymbol(atomMetaDataTable, &zero_ptrs, sizeof(zero_ptrs));
     cudaMallocHost((void**)&atomMetaDataTable_cache, sizeof(AtomMetaData) * MAP_LENGTH);
+    for(int i = 0; i < MAP_LENGTH; i++) {
+        atomMetaDataTable_cache[i] = AtomMetaData{};
+    }
 }
 
 

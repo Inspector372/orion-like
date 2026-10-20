@@ -241,6 +241,14 @@ compiled by g++ and linked into the same `threading` executable.
 
 ## TODO
 
+Fix the deadlock when cudaDeviceSynchronize() is called
+
+Inspect what causes 'collision' deadlock
+
+cudaStream hooking
+
+Add memory operation queue to kernels
+
 Hooking every cuMemcpy/cuMemset-type calls & MemsetAsync to 'truly' asynchronous
 
 Python frontend support
