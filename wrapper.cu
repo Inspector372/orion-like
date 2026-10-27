@@ -13,6 +13,7 @@
 #include "wrapper.h"
 
 __device__ AtomMetaData atomMetaDataTable[MAP_LENGTH];
+void* atomMetaDataTable_symbol_addr;
 AtomMetaData* atomMetaDataTable_cache;
 
 /*
@@ -92,7 +93,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == 0) {
             atomMetaDataTable_cache[idx] = value;
-            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
+            while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
@@ -133,7 +134,7 @@ void table_delete(uint64_t key) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == key) {
             atomMetaDataTable_cache[idx].key = 0;
-            while(cudaMemcpyToSymbol(atomMetaDataTable, &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice) != cudaSuccess) {
+            while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
@@ -242,6 +243,7 @@ void setup_metadata() {
     for(int i = 0; i < MAP_LENGTH; i++) {
         atomMetaDataTable_cache[i] = AtomMetaData{};
     }
+    cudaGetSymbolAddress(&atomMetaDataTable_symbol_addr, atomMetaDataTable);
 }
 
 
