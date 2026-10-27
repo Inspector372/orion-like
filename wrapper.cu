@@ -43,8 +43,6 @@ ReleaseQueueEntry release_queue[RELEASE_QUEUE_LENGTH];
     both insert() and delete() check atomMetaDataTable_host at host side to decide which block to remove,
     and atomMetaDataTable_cache MUST be updated too.
 
-    when inserting, if there is already such key in table,
-
 */
 void table_insert(uint64_t key, AtomMetaData value) {
     uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
@@ -83,7 +81,9 @@ void table_insert(uint64_t key, AtomMetaData value) {
             release_queue_mark_as_reaped(key);
             cuEventDestroy(copy);
             //cudaEventDestroy(copy);
-            fprintf(stderr, "this should not happen???\n");
+
+            // If %gridid is unique, we should not fall here.
+            fprintf(stderr, "Problem: gridid is not unique or tried to insert incorrect value.\n");
             std::exit(-1);
             return;
         }
@@ -105,18 +105,6 @@ void table_insert(uint64_t key, AtomMetaData value) {
                 delete_k++;
                 if(delete_k % 500 == 0) {
                     fprintf(stderr, "deadlock check insert new: %d, %d\n", status, delete_k);
-                }
-                if(delete_k > 1000000) {
-                    CUevent copy_2;
-                    cuEventCreate(&copy_2, CU_EVENT_DISABLE_TIMING);
-                    // cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[i], sizeof(AtomMetaData), sizeof(AtomMetaData) * i, cudaMemcpyHostToDevice, metadata_pass_stream);
-                    cuEventRecord(copy_2, metadata_pass_stream);
-                    for(;;) {
-                        CUresult status_2 = cuEventQuery(copy_2);
-                        if (status_2 == CUDA_SUCCESS) break;
-                        fprintf(stderr, "deadlock check insert twice\n");
-                    }
-                    std::exit(-1);
                 }
             }
             // cuEventSynchronize(copy);
@@ -145,7 +133,7 @@ void table_delete(uint64_t key) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == key) {
             atomMetaDataTable_cache[idx].key = 0;
-            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
+            while(cudaMemcpyToSymbol(atomMetaDataTable, &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), sizeof(AtomMetaData) * idx, cudaMemcpyHostToDevice) != cudaSuccess) {
                 ;
             }
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {

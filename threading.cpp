@@ -91,9 +91,9 @@ void hash_delete(uint64_t key) {
 	if(key == 0) {
 		fprintf(stderr, "hash_delete: trying to delete a null key. returning.\n");
 	}
-	pthread_mutex_lock(&table_mutex);
+	// pthread_mutex_lock(&table_mutex);
 	table_delete(key);
-	pthread_mutex_unlock(&table_mutex);
+	// pthread_mutex_unlock(&table_mutex);
 }
 
 // The harness owns startup and completion; workloads contain ordinary CUDA code.
@@ -246,6 +246,7 @@ void* scheduler(void* scarg) {
 
     while (true) {
 		// reap every possible event in the release queue, and call hash_delete.
+		if (turn == 0) {
 		for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
 			if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
 				if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
@@ -254,6 +255,7 @@ void* scheduler(void* scarg) {
             	release_queue[i].event = 0;
             	release_queue[i].reaped = false;
 			}
+		}
 		}
 
 
@@ -288,9 +290,9 @@ void* scheduler(void* scarg) {
 					cudaEvent_t launch_finish_event;
 					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
 
-					pthread_mutex_lock(&table_mutex);
+					// pthread_mutex_lock(&table_mutex);
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
-					pthread_mutex_unlock(&table_mutex);
+					// pthread_mutex_unlock(&table_mutex);
 					
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
 					release_queue_insert(last_key, launch_finish_event);

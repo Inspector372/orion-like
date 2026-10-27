@@ -41,7 +41,7 @@ TEST_OBJECTS := $(TEST_SOURCES:.cu=.o) testcase/registry.o $(LIBTORCH_OBJECTS)
 all: libsmctrl.o libsmctrl.a hooking.so wrapper.o threading
 
 libsmctrl.o:
-	gcc libsmctrl.c -c -o libsmctrl.o -fPIC -lcuda -L/usr/local/cuda-12.8/lib64/stubs
+	gcc -I/usr/local/cuda-12.8/include libsmctrl.c -c -o libsmctrl.o -fPIC -lcuda -L/usr/local/cuda-12.8/lib64/stubs
 
 libsmctrl.a:
 	ar rcs libsmctrl.a libsmctrl.o

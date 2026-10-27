@@ -190,9 +190,9 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	int idx = get_idx();
 	fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
 	cudaLaunchKernel_launched[idx] = true;
-	pthread_mutex_lock(table_mutex);
+	// pthread_mutex_lock(table_mutex);
 	cudaError_t err = real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
-	pthread_mutex_unlock(table_mutex);
+	// pthread_mutex_unlock(table_mutex);
 	cudaLaunchKernel_launched[idx] = false;
 	fprintf(stderr, "[cudaHook] block-start from %d!\n", idx);
 	block(idx, work_queue_mutex, work_queue);
