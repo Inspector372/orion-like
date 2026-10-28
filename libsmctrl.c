@@ -583,7 +583,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		last_key = grid_id;
 		last_metadata = metadata;
 		// hash_insert_callback(buffer_addr + 0x160, metadata);
-		hash_insert_callback(grid_id, metadata);
+		// hash_insert_callback(grid_id, metadata);
 
 		/*for(int i=0; i<9; i++) {
 			uint32_t *qmd_start_ptr = (uint32_t*)(*((char***)in_params + i) + 0);

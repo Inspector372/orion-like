@@ -293,6 +293,10 @@ void* scheduler(void* scarg) {
 					cudaEvent_t launch_finish_event;
 					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
 
+					CUdeviceptr launch_block_memory = 0;
+					cuMemAlloc(&launch_block_memory, sizeof(uint32_t));
+    				cuMemsetD32(launch_block_memory, 0, 1);
+
 					cuStreamWaitValue32((CUstream)*sched_streams[turn], launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
 
 					// pthread_mutex_lock(&table_mutex);

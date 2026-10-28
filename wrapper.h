@@ -30,6 +30,5 @@ extern cudaStream_t metadata_pass_stream;
 extern cudaError_t (*actual_cudaDeviceSynchronize)(void);
 
 extern ReleaseQueueEntry release_queue[];
-extern CUdeviceptr launch_block_memory;
 
 void initial_wrapper_run();

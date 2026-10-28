@@ -16,12 +16,6 @@ __device__ AtomMetaData atomMetaDataTable[MAP_LENGTH];
 void* atomMetaDataTable_symbol_addr;
 AtomMetaData* atomMetaDataTable_cache;
 
-/*
-    Pointer for launch block.
-    Currently we wait for only one job, so no synchronization is needed,
-    but later we might expand this for better performance.
-*/
-CUdeviceptr launch_block_memory = 0;
 
 /*
     When a real_cuLaunchKernel launch happens, OS creates an event and saves (key, event) pair.
@@ -253,8 +247,6 @@ void setup_metadata() {
         atomMetaDataTable_cache[i] = AtomMetaData{};
     }
     cudaGetSymbolAddress(&atomMetaDataTable_symbol_addr, atomMetaDataTable);
-    cuMemAlloc(&launch_block_memory, sizeof(uint32_t));
-    cuMemsetD32(launch_block_memory, 0, 1);
 }
 
 
