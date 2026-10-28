@@ -69,6 +69,7 @@ cudaStream_t* fake_launch_stream;
 
 // Stream for metadata passing.
 cudaStream_t metadata_pass_stream;
+cudaStream_t launch_block_stream;
 
 
 
@@ -209,6 +210,7 @@ void create_streams() {
 	cudaStreamCreateWithPriority(fake_launch_stream_ptr, cudaStreamNonBlocking, *hp);
  
 	cudaStreamCreateWithPriority(&metadata_pass_stream, cudaStreamNonBlocking, *hp);
+	cudaStreamCreateWithPriority(&launch_block_stream, cudaStreamNonBlocking, *hp);
 
 	free(lp);
 	free(hp);
@@ -252,9 +254,11 @@ void* scheduler(void* scarg) {
 				if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
 					if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
 					cudaEventDestroy(release_queue[i].event);
+					cuMemFree(release_queue[i].launchblock);
 					release_queue[i].key = 0;
             		release_queue[i].event = 0;
             		release_queue[i].reaped = false;
+					
 				}
 				release_queue_empty = false;
 			}
@@ -295,7 +299,8 @@ void* scheduler(void* scarg) {
 
 					CUdeviceptr launch_block_memory = 0;
 					cuMemAlloc(&launch_block_memory, sizeof(uint32_t));
-    				cuMemsetD32(launch_block_memory, 0, 1);
+    				cuMemsetD32Async(launch_block_memory, 0, 1, (CUstream)launch_block_stream);
+					cuStreamSynchronize(launch_block_stream);
 
 					cuStreamWaitValue32((CUstream)*sched_streams[turn], launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
 
@@ -305,10 +310,10 @@ void* scheduler(void* scarg) {
 
 					hash_insert(last_key, last_metadata);
 
-					cuStreamWriteValue32((CUstream)metadata_pass_stream, launch_block_memory, 1, 0);
+					cuStreamWriteValue32((CUstream)launch_block_stream, launch_block_memory, 1, 0);
 					
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
-					release_queue_insert(last_key, launch_finish_event);
+					release_queue_insert(last_key, launch_finish_event, launch_block_memory);
 					// fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
 
 				}

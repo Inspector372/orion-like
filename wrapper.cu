@@ -139,17 +139,12 @@ void table_delete(uint64_t key) {
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
-            int static_i = 0;
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
                 if (status != CUDA_ERROR_NOT_READY) {
                     fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
                     std::exit(-1);
-                }
-                static_i++;
-                if(static_i % 10000 == 500) {
-                    fprintf(stderr, "warning: static_i is rolled 10000k + 500 times\n");
                 }
             }
             // cuEventSynchronize(copy);
@@ -167,12 +162,13 @@ void table_delete(uint64_t key) {
 /*
     Helper functions for release_queue.
 */
-void release_queue_insert(uint64_t key, cudaEvent_t event) {
+void release_queue_insert(uint64_t key, cudaEvent_t event, CUdeviceptr launchblock) {
     for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
         if(release_queue[i].key == 0) {
             release_queue[i].key = key;
             release_queue[i].event = event;
             release_queue[i].reaped = false;
+            release_queue[i].launchblock = launchblock;
             return;
         }
     }

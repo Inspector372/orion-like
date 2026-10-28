@@ -12,6 +12,7 @@ typedef struct ReleaseQueueEntry {
     uint64_t key;
     cudaEvent_t event;
     bool reaped;
+    CUdeviceptr launchblock;
 
 } ReleaseQueueEntry;
 
@@ -22,7 +23,7 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu);
 extern CUfunction wrapper_handle;
 extern void table_insert(uint64_t, AtomMetaData);
 extern void table_delete(uint64_t);
-extern void release_queue_insert(uint64_t, cudaEvent_t);
+extern void release_queue_insert(uint64_t, cudaEvent_t, CUdeviceptr);
 extern void release_queue_delete(uint64_t);
 void release_queue_mark_as_reaped(uint64_t);
 extern void setup_metadata();
