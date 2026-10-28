@@ -246,16 +246,14 @@ void* scheduler(void* scarg) {
 
     while (true) {
 		// reap every possible event in the release queue, and call hash_delete.
-		if (turn == 0) {
 		for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
-			if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
+			if(release_queue[i].key != 0 && cudaEventQuery(release_queue[i].event) == cudaSuccess) {
 				if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
 				cudaEventDestroy(release_queue[i].event);
 				release_queue[i].key = 0;
             	release_queue[i].event = 0;
             	release_queue[i].reaped = false;
 			}
-		}
 		}
 
 

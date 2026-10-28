@@ -70,11 +70,6 @@ void table_insert(uint64_t key, AtomMetaData value) {
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
-                static int delete_k = 0;
-                delete_k++;
-                if(delete_k % 500 == 0) {
-                    fprintf(stderr, "deadlock check insert already: %d, %d\n", status, delete_k);
-                }
             }
             // cuEventSynchronize(copy);
             //cudaEventRecord(copy, metadata_pass_stream);
@@ -102,11 +97,6 @@ void table_insert(uint64_t key, AtomMetaData value) {
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
-                static int delete_k = 0;
-                delete_k++;
-                if(delete_k % 500 == 0) {
-                    fprintf(stderr, "deadlock check insert new: %d, %d\n", status, delete_k);
-                }
             }
             // cuEventSynchronize(copy);
             // cudaEventRecord(copy, metadata_pass_stream);
@@ -140,13 +130,13 @@ void table_delete(uint64_t key) {
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
+            int static_i = 0;
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
-                static int delete_k = 0;
-                delete_k++;
-                if(delete_k % 500 == 0) {
-                    fprintf(stderr, "deadlock check delete: %d, %d\n", status, delete_k);
+                static_i++;
+                if(static_i % 10000 == 500) {
+                    fprintf(stderr, "warning: static_i is rolled 10000k + 500 times\n");
                 }
             }
             // cuEventSynchronize(copy);
