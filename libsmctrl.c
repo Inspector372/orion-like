@@ -547,7 +547,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
 	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
 
-	// suspected gridid.
+	// %gridid was found in this address.
 	uint64_t grid_id = (uint64_t)(*((uint64_t*)in_params + 7) + 0);
 
 	// (*buffer_start) & 0x0001ffffffffffff is actual constant buffer address, since it's 49 bits long.

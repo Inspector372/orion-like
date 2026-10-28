@@ -246,14 +246,19 @@ void* scheduler(void* scarg) {
 
     while (true) {
 		// reap every possible event in the release queue, and call hash_delete.
+		bool release_queue_empty = true;
 		for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
-			if(release_queue[i].key != 0 && cudaEventQuery(release_queue[i].event) == cudaSuccess) {
-				if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
-				cudaEventDestroy(release_queue[i].event);
-				release_queue[i].key = 0;
-            	release_queue[i].event = 0;
-            	release_queue[i].reaped = false;
+			if(release_queue[i].key != 0) {
+				if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
+					if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
+					cudaEventDestroy(release_queue[i].event);
+					release_queue[i].key = 0;
+            		release_queue[i].event = 0;
+            		release_queue[i].reaped = false;
+				}
+				release_queue_empty = true;
 			}
+			
 		}
 
 
@@ -270,7 +275,7 @@ void* scheduler(void* scarg) {
         }
 		// pop one from queue, and assign.
 		pthread_mutex_lock(work_queue_mutex[turn]);
-		if(!(*work_queue[turn]).empty()) {
+		if(!(*work_queue[turn]).empty() && release_queue_empty) {
 			// We should delay popping until the end of the execution,
 			// otherwise the client will proceed and may invaildate some arguments.
 			queue_record qrecord = (*work_queue[turn]).front();
