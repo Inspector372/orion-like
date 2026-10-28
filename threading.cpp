@@ -256,7 +256,7 @@ void* scheduler(void* scarg) {
             		release_queue[i].event = 0;
             		release_queue[i].reaped = false;
 				}
-				release_queue_empty = true;
+				release_queue_empty = false;
 			}
 			
 		}

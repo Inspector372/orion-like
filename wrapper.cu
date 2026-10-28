@@ -70,6 +70,10 @@ void table_insert(uint64_t key, AtomMetaData value) {
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
+                if (status != CUDA_ERROR_NOT_READY) {
+                    fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
+                    std::exit(-1);
+                }
             }
             // cuEventSynchronize(copy);
             //cudaEventRecord(copy, metadata_pass_stream);
@@ -97,6 +101,10 @@ void table_insert(uint64_t key, AtomMetaData value) {
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
+                if (status != CUDA_ERROR_NOT_READY) {
+                    fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
+                    std::exit(-1);
+                }
             }
             // cuEventSynchronize(copy);
             // cudaEventRecord(copy, metadata_pass_stream);
@@ -134,6 +142,10 @@ void table_delete(uint64_t key) {
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
+                if (status != CUDA_ERROR_NOT_READY) {
+                    fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
+                    std::exit(-1);
+                }
                 static_i++;
                 if(static_i % 10000 == 500) {
                     fprintf(stderr, "warning: static_i is rolled 10000k + 500 times\n");
