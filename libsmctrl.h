@@ -78,6 +78,7 @@ extern uint32_t launch_hidx;
 extern uint32_t launch_signal;
 extern uint32_t callback_mode;
 extern uint64_t last_key;
+extern AtomMetaData last_metadata;
 
 #ifdef __cplusplus
 }

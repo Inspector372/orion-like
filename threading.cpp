@@ -275,7 +275,7 @@ void* scheduler(void* scarg) {
         }
 		// pop one from queue, and assign.
 		pthread_mutex_lock(work_queue_mutex[turn]);
-		if(!(*work_queue[turn]).empty() && release_queue_empty) {
+		if(!(*work_queue[turn]).empty()) {
 			// We should delay popping until the end of the execution,
 			// otherwise the client will proceed and may invaildate some arguments.
 			queue_record qrecord = (*work_queue[turn]).front();
@@ -293,9 +293,15 @@ void* scheduler(void* scarg) {
 					cudaEvent_t launch_finish_event;
 					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
 
+					cuStreamWaitValue32((CUstream)*sched_streams[turn], launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
+
 					// pthread_mutex_lock(&table_mutex);
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					// pthread_mutex_unlock(&table_mutex);
+
+					hash_insert(last_key, last_metadata);
+
+					cuStreamWriteValue32((CUstream)metadata_pass_stream, launch_block_memory, 1, 0);
 					
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
 					release_queue_insert(last_key, launch_finish_event);

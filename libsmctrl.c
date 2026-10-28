@@ -63,7 +63,7 @@ uint32_t launch_hidx;
 uint32_t launch_signal;
 uint32_t callback_mode = 0;
 uint64_t last_key;
-
+AtomMetaData_t last_metadata;
 
 /*
 	Callback function for inserting key and value into hash table.
@@ -581,6 +581,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		metadata.hidx = launch_hidx;
 		// last_key = buffer_addr + 0x160;
 		last_key = grid_id;
+		last_metadata = metadata;
 		// hash_insert_callback(buffer_addr + 0x160, metadata);
 		hash_insert_callback(grid_id, metadata);
 
