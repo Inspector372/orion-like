@@ -302,15 +302,17 @@ void* scheduler(void* scarg) {
     				cuMemsetD32Async(launch_block_memory, 0, 1, (CUstream)launch_block_stream);
 					cuStreamSynchronize(launch_block_stream);
 
+				
+					pthread_mutex_lock(&table_mutex);
 					cuStreamWaitValue32((CUstream)*sched_streams[turn], launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
 
-					// pthread_mutex_lock(&table_mutex);
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
-					// pthread_mutex_unlock(&table_mutex);
 
 					hash_insert(last_key, last_metadata);
 
 					cuStreamWriteValue32((CUstream)launch_block_stream, launch_block_memory, 1, 0);
+
+					pthread_mutex_unlock(&table_mutex);
 					
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
 					release_queue_insert(last_key, launch_finish_event, launch_block_memory);
