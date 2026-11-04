@@ -27,12 +27,19 @@
 
 using namespace std;
 
+/*
+	Variables used for checking testcases.
+*/
 struct arg_t {
     testcase::Selection selection;
     testcase::Result result;
 };
 std::atomic<int> clients_done{0};
 
+/*
+	Actual instances for cuda APIs. we use "actual_" in front of threading.cpp,
+	while "real_" is used in hooking.cpp.
+*/
 cudaError_t (*actual_cudaDeviceSynchronize)(void) = nullptr;
 cudaError_t (*actual_cudaMemset)(void*, int, size_t) = nullptr;
 cudaError_t (*actual_cudaMemsetAsync)(void*, int, size_t, cudaStream_t) = nullptr;
@@ -40,39 +47,46 @@ cudaError_t (*actual_cudaMemsetAsync)(void*, int, size_t, cudaStream_t) = nullpt
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 CUresult (*actual_cuFuncGetParamInfo)(CUfunction, size_t, size_t*, size_t*);
 
-// hooking.cpp
+/*
+	hooking.cpp.
+*/
 void* klib;
 
 
-// Work queue for N client threads.
-// Need mutex lock for those.
+/*
+	Kernel Queue.
+*/
 queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 
-// Clients wait until registration and scheduler setup are complete.
+/*	
+	Clients wait until registration and scheduler setup are complete.
+*/
 pthread_mutex_t start_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t start_cond = PTHREAD_COND_INITIALIZER;
 bool ready = false;
 
-// This is used for insertion of atomMetaDataTable.
-// only one thread can access this table, otherwise it will mess up things.
-pthread_mutex_t table_mutex;
 
-// the variable that prevents hooking.
+/*
+	No hook switch. no_hook at hooking.cpp.
+*/
 bool* no_hook_thr;
 
-// Streams for each clients.
+/*
+	Streams for each clients.
+*/
 cudaStream_t** sched_streams;
 
-// Stream for fake launch, gets the highest priority.
-cudaStream_t* fake_launch_stream;
 
-// Stream for metadata passing.
+/*
+	Stream for metadata passing / launch blocking APIs.
+*/
 cudaStream_t metadata_pass_stream;
 cudaStream_t launch_block_stream;
 
-
-
+/*
+	Argument for scheduler (currently none.)
+*/
 typedef struct scheduler_arg {
 	int PLACEHOLDER;
 } scheduler_arg;
@@ -83,18 +97,14 @@ void hash_insert(uint64_t key, AtomMetaData value) {
 		fprintf(stderr, "hash_insert: trying to insert a null key. returning.\n");
 	}
 	/* Problem: This can be INSIDE work_queue_mutex critical section, which will cause deadlock */
-	// pthread_mutex_lock(&table_mutex);
 	table_insert(key, value);
-	// pthread_mutex_unlock(&table_mutex);
 }
 
 void hash_delete(uint64_t key) {
 	if(key == 0) {
 		fprintf(stderr, "hash_delete: trying to delete a null key. returning.\n");
 	}
-	// pthread_mutex_lock(&table_mutex);
 	table_delete(key);
-	// pthread_mutex_unlock(&table_mutex);
 }
 
 // The harness owns startup and completion; workloads contain ordinary CUDA code.
@@ -165,11 +175,6 @@ void variables_setup() {
 		pthread_mutex_init(work_queue_mutex[i], NULL);
 	}
 
-	// 3. mutex for table.
-	pthread_mutex_t** table_mutex_ptr = (pthread_mutex_t**)dlsym(klib, "table_mutex");
-	*table_mutex_ptr = &table_mutex;
-	pthread_mutex_init(&table_mutex, NULL);
-
 
 	// 4. no-hook switch.
 	no_hook_thr = (bool*)dlsym(klib, "no_hook");
@@ -206,8 +211,6 @@ void create_streams() {
 	else
 		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp - 1);
 
-	cudaStream_t* fake_launch_stream_ptr = (cudaStream_t*)dlsym(klib, "fl_stream");
-	cudaStreamCreateWithPriority(fake_launch_stream_ptr, cudaStreamNonBlocking, *hp);
  
 	cudaStreamCreateWithPriority(&metadata_pass_stream, cudaStreamNonBlocking, *hp);
 	cudaStreamCreateWithPriority(&launch_block_stream, cudaStreamNonBlocking, *hp);
@@ -301,9 +304,7 @@ void* scheduler(void* scarg) {
 					cuMemAlloc(&launch_block_memory, sizeof(uint32_t));
     				cuMemsetD32Async(launch_block_memory, 0, 1, (CUstream)launch_block_stream);
 					cuStreamSynchronize(launch_block_stream);
-
 				
-					pthread_mutex_lock(&table_mutex);
 					cuStreamWaitValue32((CUstream)*sched_streams[turn], launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
 
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
@@ -311,8 +312,6 @@ void* scheduler(void* scarg) {
 					hash_insert(last_key, last_metadata);
 
 					cuStreamWriteValue32((CUstream)launch_block_stream, launch_block_memory, 1, 0);
-
-					pthread_mutex_unlock(&table_mutex);
 					
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
 					release_queue_insert(last_key, launch_finish_event, launch_block_memory);

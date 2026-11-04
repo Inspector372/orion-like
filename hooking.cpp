@@ -6,9 +6,9 @@
 	* NO HOOK * Device Management: cuFlushGPUDirectRDMAWrites() is a blocking API, otherwise no hooking is needed.
 	* NO HOOK * Context Management(Driver): The hooking itself is not a big deal, but launching in OS thread will struggle to give its error state, etc... to user thread.
 											For now just leave it as no hooking.
-	* NO HOOK * Module Management(Driver): 	If a tenant loads a module, then the OS must be able to use it(because hooking is ultimately coming to OS).
+	* DEVICE HOOK * Module Management(Driver): 	If a tenant loads a module, then the OS must be able to use it(because hooking is ultimately coming to OS).
 											This might need hooking the whole API.
-											For now just leave it as no hooking.
+											Some module functions collide with cuLaunchKernel(). Inspect this and hook if needed.
 	* NO HOOK * Library Management(Driver): Almost asme as module management part.
 											One thing is there are some functions that feeds configuration to kernels,
 											but need to think if OS should ignore such user-level configurations.
@@ -44,26 +44,35 @@
 
 #include "hooking.h"
 
+/* Just error handling of c++ name mangling. */
 typedef cudaError_t (*PFN_cudaLaunchKernel)(
     const void*, dim3, dim3, void**, size_t, cudaStream_t
 );
 
 using namespace std;
 
+/* switch variable for no-hook launches(for initial launches) */
 bool no_hook = true;
 
 pthread_t* thread_ids;
+
+/* 
+	Kernel Queue. This queues cuLaunchKernel, and its derivatives.
+	cudaMemset/Async() can be a kernel, so it goes to kernel queue.
+*/
 queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
-cudaStream_t fl_stream;
 
-pthread_mutex_t* table_mutex;
+/*
+	Memory Queue. Originally
+*/
 
+/*
+	Real instances of cuda APIs.
+*/
 cudaError_t (*real_cudaMemset)(void* devPtr, int value, size_t count) = NULL;
 cudaError_t (*real_cudaMemsetAsync)(void* devPtr, int value, size_t count, cudaStream_t stream) = NULL;
-
 cudaError_t (*real_cudaLaunchKernel)(const void*, dim3, dim3, void**, size_t, cudaStream_t) = NULL;
-
 CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
 CUresult (*real_cuLaunchKernelEx)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) = NULL;
 CUresult (*real_cuLaunchKernel_ptsz)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
@@ -71,21 +80,26 @@ CUresult (*real_cuLaunchKernelEx_ptsz)(const CUlaunchConfig* config, CUfunction 
 CUresult (*real_cuGraphLaunch)(CUgraphExec hGraphExec, CUstream hStream) = NULL;
 CUresult (*real_cuLaunchCooperativeKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**) = NULL;
 
-
+/*
+	Main cuda address resolving API.
+*/
 typedef CUresult (*cuGetProcAddress_t)(const char*, void**, int, unsigned int, void*);
 cuGetProcAddress_t real_cuGetProcAddress = NULL;
 cuGetProcAddress_t real_cuGetProcAddress_v2 = NULL;
+
+/*
+	Real instance of dlsym().
+*/
 void* (*real_dlsym)(void*, const char*) = NULL;
 void* cu_handle = NULL;
 
-// variable for identifying if current launch is from cudaLaunchKernel(), or separate mechanism.
+
+/*
+	variable for identifying if current launch is from cudaLaunchKernel(), or separate mechanism
+*/
 bool cudaLaunchKernel_launched[THREAD_NUM];
 
 
-
-
-// orion uses thread ids to inspect 'what is this thread's thread number'.
-// this is a trick, but let's use it.
 int get_idx() {
 	assert(thread_ids != NULL);
 	pthread_t tid = pthread_self();
@@ -103,7 +117,6 @@ int get_idx() {
 	return idx;
 }
 
-// directly adapted from Orion.
 void block(int idx, pthread_mutex_t** mutexes, queue<queue_record>** kqueues) {
 	while (1) {
 		pthread_mutex_lock(mutexes[idx]);
@@ -137,14 +150,11 @@ void block(int idx, pthread_mutex_t** mutexes, queue<queue_record>** kqueues) {
 extern "C" {
 
 /*
-	We need some synchronization behavior for this one.
-	for that, *exact* behavior of cudaDeviceSynchronize() need to be inspected.
+	*exact* behavior of cudaDeviceSynchronize() need to be inspected.
 
 	For now, it creates a cudaevent, attaches in work_queue.
 	and wait until it gets scheduled and eventually finished.
-	this works because one thread(user) got only one thread. 
 */
-/*
 cudaError_t cudaDeviceSynchronize(void) {
 	
 	cudaEvent_t event;
@@ -161,20 +171,18 @@ cudaError_t cudaDeviceSynchronize(void) {
 	work_queue[idx]->push(new_qrecord);
 	pthread_mutex_unlock(work_queue_mutex[idx]);
 	
-
-	fprintf(stderr, "thread %d, waiting until finish\n", idx);
 	block(idx, work_queue_mutex, work_queue);
 	cudaEventSynchronize(event);
-	fprintf(stderr, "thread %d, finished waiting\n", idx);
 
 	cudaEventDestroy(event);
 	return cudaSuccess;
 }
-*/
 
 /*
+	** Kernel-like APIs **
 	Hook for cudaLaunchKernel, ... etc
-	Those runtime API creates collision with APIs called inside libsmctrl.
+	They are mainly modifying GPU conternts in allocated memory.
+	Kernel Queue will handle this.
 */
 
 cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void** args, size_t sharedMem, cudaStream_t stream) {
@@ -190,9 +198,7 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	int idx = get_idx();
 	fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
 	cudaLaunchKernel_launched[idx] = true;
-	pthread_mutex_lock(table_mutex);
 	cudaError_t err = real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
-	pthread_mutex_unlock(table_mutex);
 	cudaLaunchKernel_launched[idx] = false;
 	fprintf(stderr, "[cudaHook] block-start from %d!\n", idx);
 	block(idx, work_queue_mutex, work_queue);

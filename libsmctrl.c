@@ -528,8 +528,8 @@ abort_cuda:
 	consider any kernel call as wrapper call, then stores PROGRAM_ADDRESS/REGISTER_CNT(_V).
 
     if callback_mode == 1, it's normal kernel launch mode.
-	1. Add new entry inside gpu's hash table:
-		CONSTANT_BUFFER_ADDR + 0x160 => ((key), PROGRAM_ADDRESS, lidx, hidx)
+	(1. Add new entry inside gpu's hash table:
+		CONSTANT_BUFFER_ADDR + 0x160 => ((key), PROGRAM_ADDRESS, lidx, hidx))
 	2. PROGRAM_ADDRESS is replaced with PROGRAM_ADDRESS(wrapper).
 	3. if REGISTER_CNT(_V) is smaller than wrapper, it's replaced with wrapper's value.
 */
@@ -584,12 +584,6 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		last_metadata = metadata;
 		// hash_insert_callback(buffer_addr + 0x160, metadata);
 		// hash_insert_callback(grid_id, metadata);
-
-		/*for(int i=0; i<9; i++) {
-			uint32_t *qmd_start_ptr = (uint32_t*)(*((char***)in_params + i) + 0);
-			fprintf(stderr, "[libsmctrl] af offset %d: %lx\n", i, qmd_start_ptr);
-		}
-		fprintf(stderr, "lidx: %d, hidx: %d, domain: %d, cbid: %d\n", launch_lidx, launch_hidx, domain, cbid);*/
 		
 		*upper_ptr = wrapper_progaddr_upper;
 		*lower_ptr = wrapper_progaddr_lower;
