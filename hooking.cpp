@@ -59,12 +59,13 @@ pthread_t* thread_ids;
 /* 
 	Kernel Queue. This queues cuLaunchKernel, and its derivatives.
 	cudaMemset/Async() can be a kernel, so it goes to kernel queue.
+	For now, memory operations also go here.
 */
 queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 
 /*
-	Memory Queue. Originally
+	TODO: create Memory Queue, which contains HtoD/DtoH memory operations.
 */
 
 /*
@@ -180,7 +181,7 @@ cudaError_t cudaDeviceSynchronize(void) {
 
 /*
 	** Kernel-like APIs **
-	Hook for cudaLaunchKernel, ... etc
+	Hook for cuLaunchKernel, ... etc
 	They are mainly modifying GPU conternts in allocated memory.
 	Kernel Queue will handle this.
 */
@@ -207,76 +208,6 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	return err;
 }
 
-/*
-	Hook for cudaMemset, cudaMemsetAsync, ...
-	cudaMemcpy DtoD, ...
-	which internally calls a kernel silently.
-	They *must* be launched with the scheduler, otherwise it will break libsmctrl logic!
-	
-*/
-cudaError_t cudaMemset(void* devPtr, int value, size_t count) {
-	if (real_cudaMemset == NULL) {
-        real_cudaMemset = (cudaError_t (*)(void*, int, size_t))real_dlsym(RTLD_NEXT, "cudaMemset");
-        if(real_cudaMemset == NULL) {
-            fprintf(stderr, "FATAL ERROR: real_cudaMemset == NULL\n");
-        }
-    }
-	int idx = get_idx();
-	fprintf(stderr, "[cudaMemsetHook] hooked from %d!\n", idx);
-
-	assert(work_queue_mutex != NULL);
-	assert(work_queue != NULL);
-
-	record_cudaMemset new_record;
-	new_record = {devPtr, value, count};
-	union record_data new_record_data;
-	new_record_data.r_cudaMemset = new_record;
-	queue_record new_qrecord = {RECORD_CUDAMEMSET, new_record_data};
-
-	pthread_mutex_lock(work_queue_mutex[idx]);
-	work_queue[idx]->push(new_qrecord);
-	pthread_mutex_unlock(work_queue_mutex[idx]);
-	
-	fprintf(stderr, "[cudaMemsetHook] blocking from %d!\n", idx);
-	block(idx, work_queue_mutex, work_queue);
-	fprintf(stderr, "[cudaMemsetHook] unblocking from %d!\n", idx);
-
-	return cudaSuccess;
-
-}
-
-cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t stream) {
-	if (real_cudaMemsetAsync == NULL) {
-        real_cudaMemsetAsync = (cudaError_t (*)(void*, int, size_t, cudaStream_t))real_dlsym(RTLD_NEXT, "cudaMemsetAsync");
-        if(real_cudaMemsetAsync == NULL) {
-            fprintf(stderr, "FATAL ERROR: real_cudaMemsetAsync == NULL\n");
-        }
-    }
-	int idx = get_idx();
-	fprintf(stderr, "[cudaMemsetAsyncHook] hooked from %d!\n", idx);
-
-	assert(work_queue_mutex != NULL);
-	assert(work_queue != NULL);
-
-	record_cudaMemsetAsync new_record;
-	new_record = {devPtr, value, count, stream};
-	union record_data new_record_data;
-	new_record_data.r_cudaMemsetAsync = new_record;
-	queue_record new_qrecord = {RECORD_CUDAMEMSETASYNC, new_record_data};
-
-	pthread_mutex_lock(work_queue_mutex[idx]);
-	work_queue[idx]->push(new_qrecord);
-	pthread_mutex_unlock(work_queue_mutex[idx]);
-	
-	// Async is not blocking 'at user level', so no block here.
-	// but it's certainly blocking 'at OS level'.
-
-	return cudaSuccess;
-}
-
-/*
-	Hook for cuLaunchKernel, cuLaunchKernelEx...
-*/
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
                         unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
@@ -429,6 +360,80 @@ CUresult cuLaunchCooperativeKernel(CUfunction f, unsigned int gridDimX, unsigned
     }
 	return real_cuLaunchCooperativeKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams);
 }
+
+
+/*
+	Hook for cudaMemset, cudaMemsetAsync, ...
+	cudaMemcpy DtoD, ...
+	which internally calls a kernel silently.
+	They *must* be launched with the scheduler, otherwise it will break libsmctrl logic!
+	
+*/
+cudaError_t cudaMemset(void* devPtr, int value, size_t count) {
+	if (real_cudaMemset == NULL) {
+        real_cudaMemset = (cudaError_t (*)(void*, int, size_t))real_dlsym(RTLD_NEXT, "cudaMemset");
+        if(real_cudaMemset == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cudaMemset == NULL\n");
+        }
+    }
+	int idx = get_idx();
+	fprintf(stderr, "[cudaMemsetHook] hooked from %d!\n", idx);
+
+	assert(work_queue_mutex != NULL);
+	assert(work_queue != NULL);
+
+	record_cudaMemset new_record;
+	new_record = {devPtr, value, count};
+	union record_data new_record_data;
+	new_record_data.r_cudaMemset = new_record;
+	queue_record new_qrecord = {RECORD_CUDAMEMSET, new_record_data};
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+	work_queue[idx]->push(new_qrecord);
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+	
+	fprintf(stderr, "[cudaMemsetHook] blocking from %d!\n", idx);
+	block(idx, work_queue_mutex, work_queue);
+	fprintf(stderr, "[cudaMemsetHook] unblocking from %d!\n", idx);
+
+	return cudaSuccess;
+
+}
+
+cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t stream) {
+	if (real_cudaMemsetAsync == NULL) {
+        real_cudaMemsetAsync = (cudaError_t (*)(void*, int, size_t, cudaStream_t))real_dlsym(RTLD_NEXT, "cudaMemsetAsync");
+        if(real_cudaMemsetAsync == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cudaMemsetAsync == NULL\n");
+        }
+    }
+	int idx = get_idx();
+	fprintf(stderr, "[cudaMemsetAsyncHook] hooked from %d!\n", idx);
+
+	assert(work_queue_mutex != NULL);
+	assert(work_queue != NULL);
+
+	record_cudaMemsetAsync new_record;
+	new_record = {devPtr, value, count, stream};
+	union record_data new_record_data;
+	new_record_data.r_cudaMemsetAsync = new_record;
+	queue_record new_qrecord = {RECORD_CUDAMEMSETASYNC, new_record_data};
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+	work_queue[idx]->push(new_qrecord);
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+	
+	// Async is not blocking 'at user level', so no block here.
+	// but it's certainly blocking 'at OS level'.
+
+	return cudaSuccess;
+}
+
+/*
+	cuGetProcAddress is ACTUALLY where we redirect driver APIs.
+	for convenience(and maybe existing just name mangling way of linking), we set the exact same name for driver API hooks,
+	but this is where the hook actaully proceed.
+*/
 
 CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
     // fprintf(stderr, "[HOOK v1] Inside cuGetProcAddress looking for: %s\n", symbol);
