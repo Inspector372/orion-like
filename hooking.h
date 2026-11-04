@@ -11,7 +11,6 @@ enum record_type {
 	RECORD_CUMEMHOSTALLOC,
 	RECORD_CUMEMFREE,
 	RECORD_CUMEMFREEHOST,
-	RECORD_CULIBRARYGETMODULE,
 	OTHERS
 };
 
@@ -78,14 +77,7 @@ typedef struct record_cuMemFreeHost {
 	CUresult* status; // Caller stays in block() until the scheduler pops this record.
 } record_cuMemFreeHost;
 
-typedef struct record_cuLibraryGetModule {
-    CUmodule* pMod;
-    CUlibrary library;
-    CUresult* status; // Caller stays in block() until the scheduler pops this record.
-} record_cuLibraryGetModule;
-
 union record_data {
-    record_cuLibraryGetModule r_cuLibraryGetModule;
 	record_cuMemAlloc r_cuMemAlloc;
 	record_cuMemAllocHost r_cuMemAllocHost;
 	record_cuMemHostAlloc r_cuMemHostAlloc;

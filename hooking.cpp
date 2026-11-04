@@ -166,28 +166,6 @@ static int memory_client_idx() {
 
 extern "C" {
 
-CUresult CUDAAPI cuLibraryGetModule(CUmodule* pMod, CUlibrary library) {
-    static CUresult (CUDAAPI *real_cuLibraryGetModule)(CUmodule*, CUlibrary) =
-        (CUresult (CUDAAPI *)(CUmodule*, CUlibrary))memory_driver_symbol("cuLibraryGetModule");
-    if (real_cuLibraryGetModule == NULL) return CUDA_ERROR_NOT_INITIALIZED;
-    int idx = memory_client_idx();
-    if (idx < 0) return real_cuLibraryGetModule(pMod, library);
-
-    CUresult status = CUDA_SUCCESS;
-    record_cuLibraryGetModule new_record = {pMod, library, &status};
-    union record_data new_record_data;
-    new_record_data.r_cuLibraryGetModule = new_record;
-    queue_record new_qrecord = {RECORD_CULIBRARYGETMODULE, new_record_data};
-
-    pthread_mutex_lock(work_queue_mutex[idx]);
-    work_queue[idx]->push(new_qrecord);
-    pthread_mutex_unlock(work_queue_mutex[idx]);
-
-    block(idx, work_queue_mutex, work_queue);
-    return status;
-}
-
-
 CUresult CUDAAPI cuMemAlloc(CUdeviceptr* dptr, size_t bytesize) {
     static CUresult (CUDAAPI *real_cuMemAlloc)(CUdeviceptr*, size_t) =
         (CUresult (CUDAAPI *)(CUdeviceptr*, size_t))memory_driver_symbol("cuMemAlloc_v2");
@@ -585,19 +563,6 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t 
 
 CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
 
-    if (symbol && strcmp(symbol, "cuLibraryGetModule") == 0) {
-        // Let the driver validate the lookup and select its ABI first.
-        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t) =
-            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t))
-                memory_driver_symbol("cuGetProcAddress");
-        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
-        CUresult status = resolve(symbol, pfn, cudaVersion, flags);
-        if (status == CUDA_SUCCESS && pfn && *pfn &&
-            *pfn == memory_driver_symbol("cuLibraryGetModule"))
-            *pfn = (void*)cuLibraryGetModule;
-        return status;
-    }
-
     if (symbol && (strcmp(symbol, "cuMemAlloc") == 0 || strcmp(symbol, "cuMemAlloc_v2") == 0)) {
         // Let the driver validate the lookup and select its ABI first.
         static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t) =
@@ -712,19 +677,6 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
 }
 
 CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
-
-    if (symbol && strcmp(symbol, "cuLibraryGetModule") == 0) {
-        // Let the driver validate the lookup and select its ABI first.
-        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*) =
-            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*))
-                memory_driver_symbol("cuGetProcAddress_v2");
-        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
-        CUresult status = resolve(symbol, pfn, cudaVersion, flags, (CUdriverProcAddressQueryResult*)symbolStatus);
-        if (status == CUDA_SUCCESS && pfn && *pfn &&
-            *pfn == memory_driver_symbol("cuLibraryGetModule"))
-            *pfn = (void*)cuLibraryGetModule;
-        return status;
-    }
 
     if (symbol && (strcmp(symbol, "cuMemAlloc") == 0 || strcmp(symbol, "cuMemAlloc_v2") == 0)) {
         // Let the driver validate the lookup and select its ABI first.
@@ -866,13 +818,6 @@ void* dlsym(void* handle, const char* symbol) {
         void* resolved = real_dlsym(handle, symbol);
         if (resolved && resolved == memory_driver_symbol("cuMemFreeHost"))
             return (void*)cuMemFreeHost;
-        return resolved;
-    }
-
-    if (symbol && strcmp(symbol, "cuLibraryGetModule") == 0) {
-        void* resolved = real_dlsym(handle, symbol);
-        if (resolved && resolved == memory_driver_symbol("cuLibraryGetModule"))
-            return (void*)cuLibraryGetModule;
         return resolved;
     }
 
