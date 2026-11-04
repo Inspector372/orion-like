@@ -85,10 +85,10 @@ cudaStream_t metadata_pass_stream;
 cudaStream_t launch_block_stream;
 
 /*
-	Argument for scheduler (currently none.)
+	Main's initialized CUDA context, shared by scheduler streams and metadata.
 */
 typedef struct scheduler_arg {
-	int PLACEHOLDER;
+	CUcontext context;
 } scheduler_arg;
 
 
@@ -241,6 +241,13 @@ void assign_launch() {
 	no priority, no streams, just running.
 */
 void* scheduler(void* scarg) {
+    scheduler_arg* args = (scheduler_arg*)scarg;
+    CUresult context_status = cuCtxSetCurrent(args->context);
+    if (context_status != CUDA_SUCCESS) {
+        fprintf(stderr, "Cannot bind scheduler CUDA context: %d\n", (int)context_status);
+        std::exit(EXIT_FAILURE);
+    }
+
     void* memory_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
     void* (*memory_dlsym)(void*, const char*) =
         (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
@@ -262,7 +269,6 @@ void* scheduler(void* scarg) {
     assert(actual_cuMemFreeHost != NULL);
 
 	int turn = 0;
-	(void)scarg;
     pthread_mutex_lock(&start_mutex);
     ready = true;
     pthread_cond_broadcast(&start_cond);
@@ -469,6 +475,15 @@ int main(int argc, char** argv) {
 
 	printf("assign_launch done.\n");
 
+    // Capture the context that owns the streams and metadata before starting clients.
+    scheduler_arg scarg = {};
+    CUresult context_status = cuCtxGetCurrent(&scarg.context);
+    if (context_status != CUDA_SUCCESS || scarg.context == NULL) {
+        fprintf(stderr, "Cannot obtain main CUDA context: status=%d, context=%p\n",
+                (int)context_status, (void*)scarg.context);
+        return EXIT_FAILURE;
+    }
+
 
 
 	// create [num] threads to run kernel.
@@ -490,7 +505,6 @@ int main(int argc, char** argv) {
 
 	// create scheduler.
 	printf("creating scheduler...\n");
-	scheduler_arg scarg;
 	if (pthread_create(&threads[scheduler_idx], NULL, scheduler, &scarg) != 0) {
         fprintf(stderr, "Scheduler creation failed\n"); std::exit(EXIT_FAILURE);
     }
