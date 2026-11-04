@@ -267,6 +267,9 @@ void* scheduler(void* scarg) {
     CUresult (CUDAAPI *actual_cuMemFreeHost)(void*) =
         (CUresult (CUDAAPI *)(void*))memory_dlsym(memory_handle, "cuMemFreeHost");
     assert(actual_cuMemFreeHost != NULL);
+    CUresult (CUDAAPI *actual_cuLibraryGetModule)(CUmodule*, CUlibrary) =
+        (CUresult (CUDAAPI *)(CUmodule*, CUlibrary))memory_dlsym(memory_handle, "cuLibraryGetModule");
+    assert(actual_cuLibraryGetModule != NULL);
 
 	int turn = 0;
     pthread_mutex_lock(&start_mutex);
@@ -315,6 +318,12 @@ void* scheduler(void* scarg) {
 			pthread_mutex_unlock(work_queue_mutex[turn]);
 
 			switch(qrecord.type) {
+                case RECORD_CULIBRARYGETMODULE: {
+                    record_cuLibraryGetModule record = qrecord.data.r_cuLibraryGetModule;
+                    *record.status = actual_cuLibraryGetModule(record.pMod, record.library);
+                }
+                break;
+
 
                 case RECORD_CUMEMALLOC: {
                     record_cuMemAlloc record = qrecord.data.r_cuMemAlloc;
