@@ -84,9 +84,10 @@ CUresult (*real_cuLaunchCooperativeKernel)(CUfunction, unsigned int, unsigned in
 /*
 	Main cuda address resolving API.
 */
-typedef CUresult (*cuGetProcAddress_t)(const char*, void**, int, unsigned int, void*);
+typedef CUresult (CUDAAPI *cuGetProcAddress_t)(const char*, void**, int, cuuint64_t);
+typedef CUresult (CUDAAPI *cuGetProcAddress_v2_t)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*);
 cuGetProcAddress_t real_cuGetProcAddress = NULL;
-cuGetProcAddress_t real_cuGetProcAddress_v2 = NULL;
+cuGetProcAddress_v2_t real_cuGetProcAddress_v2 = NULL;
 
 /*
 	Real instance of dlsym().
@@ -148,7 +149,119 @@ void block(int idx, pthread_mutex_t** mutexes, queue<queue_record>** kqueues) {
 	6. further all cuLaunchKernel is hooked.
 
 */
+
+// Use the real loader, never our dlsym hook, for driver entry points.
+// Function-local statics provide thread-safe initialization for these new hooks.
+static void* memory_driver_symbol(const char* symbol) {
+    static auto loader = reinterpret_cast<void* (*)(void*, const char*)>(
+        dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5"));
+    static void* driver = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
+    return loader && driver ? loader(driver, symbol) : nullptr;
+}
+
+static int memory_client_idx() {
+    // Startup, scheduler and other unregistered threads must not self-enqueue.
+    // Unregistered framework workers are outside this harness's queue coverage.
+    if (no_hook || !thread_ids || !work_queue || !work_queue_mutex) return -1;
+    for (int i = 0; i < THREAD_NUM; ++i)
+        if (pthread_equal(pthread_self(), thread_ids[i])) return i;
+    return -1;
+}
+
+static CUresult queue_driver_memory(int idx, record_type type,
+                                    record_driver_memory record) {
+    static auto get_context = reinterpret_cast<decltype(&cuCtxGetCurrent)>(
+        memory_driver_symbol("cuCtxGetCurrent"));
+    if (!get_context) return CUDA_ERROR_NOT_INITIALIZED;
+    CUresult status = get_context(&record.context);
+    if (status != CUDA_SUCCESS) return status;
+
+    driver_memory_completion completion;
+    record.completion = &completion;
+    record_data data;
+    data.r_driver_memory = record;
+    queue_record request = {type, data};
+    pthread_mutex_lock(work_queue_mutex[idx]);
+    try {
+        work_queue[idx]->push(request);
+    } catch (...) {
+        pthread_mutex_unlock(work_queue_mutex[idx]);
+        pthread_cond_destroy(&completion.condition);
+        pthread_mutex_destroy(&completion.mutex);
+        return CUDA_ERROR_OUT_OF_MEMORY;
+    }
+    pthread_mutex_unlock(work_queue_mutex[idx]);
+
+    pthread_mutex_lock(&completion.mutex);
+    while (!completion.done)
+        pthread_cond_wait(&completion.condition, &completion.mutex);
+    status = completion.status;
+    pthread_mutex_unlock(&completion.mutex);
+    pthread_cond_destroy(&completion.condition);
+    pthread_mutex_destroy(&completion.mutex);
+    return status;
+}
+
 extern "C" {
+
+CUresult CUDAAPI cuMemAlloc(CUdeviceptr* dptr, size_t bytesize) {
+    static auto real = reinterpret_cast<decltype(&cuMemAlloc)>(
+        memory_driver_symbol("cuMemAlloc_v2"));
+    if (!real) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(dptr, bytesize);
+    record_driver_memory record{};
+    record.device_out = dptr; record.bytesize = bytesize;
+    return queue_driver_memory(idx, RECORD_CUMEMALLOC, record);
+}
+
+
+CUresult CUDAAPI cuMemAllocHost(void** pp, size_t bytesize) {
+    static auto real = reinterpret_cast<decltype(&cuMemAllocHost)>(
+        memory_driver_symbol("cuMemAllocHost_v2"));
+    if (!real) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(pp, bytesize);
+    record_driver_memory record{};
+    record.host_out = pp; record.bytesize = bytesize;
+    return queue_driver_memory(idx, RECORD_CUMEMALLOCHOST, record);
+}
+
+
+CUresult CUDAAPI cuMemHostAlloc(void** pp, size_t bytesize, unsigned int flags) {
+    static auto real = reinterpret_cast<decltype(&cuMemHostAlloc)>(
+        memory_driver_symbol("cuMemHostAlloc"));
+    if (!real) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(pp, bytesize, flags);
+    record_driver_memory record{};
+    record.host_out = pp; record.bytesize = bytesize; record.flags = flags;
+    return queue_driver_memory(idx, RECORD_CUMEMHOSTALLOC, record);
+}
+
+
+CUresult CUDAAPI cuMemFree(CUdeviceptr dptr) {
+    static auto real = reinterpret_cast<decltype(&cuMemFree)>(
+        memory_driver_symbol("cuMemFree_v2"));
+    if (!real) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(dptr);
+    record_driver_memory record{};
+    record.device_ptr = dptr;
+    return queue_driver_memory(idx, RECORD_CUMEMFREE, record);
+}
+
+
+CUresult CUDAAPI cuMemFreeHost(void* p) {
+    static auto real = reinterpret_cast<decltype(&cuMemFreeHost)>(
+        memory_driver_symbol("cuMemFreeHost"));
+    if (!real) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(p);
+    record_driver_memory record{};
+    record.host_ptr = p;
+    return queue_driver_memory(idx, RECORD_CUMEMFREEHOST, record);
+}
 
 /*
 	*exact* behavior of cudaDeviceSynchronize() need to be inspected.
@@ -435,88 +548,76 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t 
 	but this is where the hook actaully proceed.
 */
 
-CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
-    // fprintf(stderr, "[HOOK v1] Inside cuGetProcAddress looking for: %s\n", symbol);
-
-    if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
-        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel pointer assignment!\n");
-        *pfn = (void*)cuLaunchKernel;
-        return CUDA_SUCCESS;
-    }
-
-	if (symbol && strcmp(symbol, "cuLaunchKernelEx") == 0) {
-        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernelEx pointer assignment!\n");
-        *pfn = (void*)cuLaunchKernelEx;
-        return CUDA_SUCCESS;
-    }
-
-	if (symbol && strcmp(symbol, "cuGraphLaunch") == 0) {
-        fprintf(stderr, "[HOOK v1] Hijacking cuGraphLaunch pointer assignment!\n");
-        *pfn = (void*)cuGraphLaunch;
-        return CUDA_SUCCESS;
-    }
-
-	if (symbol && strcmp(symbol, "cuLaunchKernel_ptsz") == 0) {
-        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel_ptsz pointer assignment!\n");
-        *pfn = (void*)cuGraphLaunch;
-        return CUDA_SUCCESS;
-    }
-
-	if (symbol && strcmp(symbol, "cuLaunchKernelEx_ptsz") == 0) {
-        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernelEx_ptsz pointer assignment!\n");
-        *pfn = (void*)cuGraphLaunch;
-        return CUDA_SUCCESS;
-    }
-
-	if (symbol && strcmp(symbol, "cuLaunchCooperativeKernel") == 0) {
-        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchCooperativeKernel pointer assignment!\n");
-        *pfn = (void*)cuLaunchCooperativeKernel;
-        return CUDA_SUCCESS;
-    }
-
-    // Call the real cuGetProcAddress if it's anything else
-    if (real_cuGetProcAddress == NULL) {
-        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
-        real_cuGetProcAddress = (cuGetProcAddress_t)dlvsym(RTLD_NEXT, "cuGetProcAddress", "RTLD_NEXT"); 
-        if(!real_cuGetProcAddress) {
-             real_cuGetProcAddress = (cuGetProcAddress_t)real_dlsym(cu_handle, "cuGetProcAddress");
-        }
-    }
-    return real_cuGetProcAddress(symbol, pfn, cudaVersion, flags, symbolStatus);
+// Only redirect the ABI that our CUDA 12.8 signatures implement. In particular,
+// legacy cuMemAlloc/cuMemFree exports use different pointer/size widths.
+static void* memory_hook_address(const char* symbol, void* resolved) {
+    if (!symbol || !resolved) return nullptr;
+    if ((strcmp(symbol, "cuMemAlloc") == 0 || strcmp(symbol, "cuMemAlloc_v2") == 0) &&
+        resolved == memory_driver_symbol("cuMemAlloc_v2"))
+        return reinterpret_cast<void*>(&cuMemAlloc);
+    if ((strcmp(symbol, "cuMemAllocHost") == 0 || strcmp(symbol, "cuMemAllocHost_v2") == 0) &&
+        resolved == memory_driver_symbol("cuMemAllocHost_v2"))
+        return reinterpret_cast<void*>(&cuMemAllocHost);
+    if ((strcmp(symbol, "cuMemHostAlloc") == 0 || strcmp(symbol, "cuMemHostAlloc") == 0) &&
+        resolved == memory_driver_symbol("cuMemHostAlloc"))
+        return reinterpret_cast<void*>(&cuMemHostAlloc);
+    if ((strcmp(symbol, "cuMemFree") == 0 || strcmp(symbol, "cuMemFree_v2") == 0) &&
+        resolved == memory_driver_symbol("cuMemFree_v2"))
+        return reinterpret_cast<void*>(&cuMemFree);
+    if ((strcmp(symbol, "cuMemFreeHost") == 0 || strcmp(symbol, "cuMemFreeHost") == 0) &&
+        resolved == memory_driver_symbol("cuMemFreeHost"))
+        return reinterpret_cast<void*>(&cuMemFreeHost);
+    return nullptr;
 }
 
-CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
-    // fprintf(stderr, "[HOOK v2] Inside cuGetProcAddress_v2 looking for: %s\n", symbol);
-
-    if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
-        fprintf(stderr, "[HOOK v2] Hijacking cuLaunchKernel pointer assignment!\n");
-        *pfn = (void*)cuLaunchKernel;
-        return CUDA_SUCCESS;
+static void redirect_driver_address(const char* symbol, void** pfn) {
+    if (!symbol || !pfn || !*pfn) return;
+    if (void* hook = memory_hook_address(symbol, *pfn)) {
+        *pfn = hook;
+        return;
     }
+    // Preserve the existing launch interception, with the correct ptsz targets.
+    if (strcmp(symbol, "cuLaunchKernel") == 0)
+        *pfn = reinterpret_cast<void*>(&cuLaunchKernel);
+    else if (strcmp(symbol, "cuLaunchKernelEx") == 0)
+        *pfn = reinterpret_cast<void*>(&cuLaunchKernelEx);
+    else if (strcmp(symbol, "cuGraphLaunch") == 0)
+        *pfn = reinterpret_cast<void*>(&cuGraphLaunch);
+    else if (strcmp(symbol, "cuLaunchKernel_ptsz") == 0)
+        *pfn = reinterpret_cast<void*>(&cuLaunchKernel_ptsz);
+    else if (strcmp(symbol, "cuLaunchKernelEx_ptsz") == 0)
+        *pfn = reinterpret_cast<void*>(&cuLaunchKernelEx_ptsz);
+    else if (strcmp(symbol, "cuLaunchCooperativeKernel") == 0)
+        *pfn = reinterpret_cast<void*>(&cuLaunchCooperativeKernel);
+}
 
+CUresult CUDAAPI my_cuGetProcAddress(const char* symbol, void** pfn,
+                                    int cudaVersion, cuuint64_t flags) {
+    static auto real = reinterpret_cast<cuGetProcAddress_t>(
+        memory_driver_symbol("cuGetProcAddress"));
+    if (!real) return CUDA_ERROR_NOT_INITIALIZED;
+    CUresult status = real(symbol, pfn, cudaVersion, flags);
+    if (status == CUDA_SUCCESS) redirect_driver_address(symbol, pfn);
+    return status;
+}
+
+CUresult CUDAAPI my_cuGetProcAddress_v2(const char* symbol, void** pfn,
+        int cudaVersion, cuuint64_t flags, CUdriverProcAddressQueryResult* symbolStatus) {
+    static auto real = reinterpret_cast<cuGetProcAddress_v2_t>(
+        memory_driver_symbol("cuGetProcAddress_v2"));
+    if (!real) return CUDA_ERROR_NOT_INITIALIZED;
+    CUresult status = real(symbol, pfn, cudaVersion, flags, symbolStatus);
+    if (status != CUDA_SUCCESS || !pfn || !*pfn) return status;
+    // cuGetProcAddress itself has two ABIs; honor the one the driver selected.
     if (symbol && strcmp(symbol, "cuGetProcAddress") == 0) {
-        fprintf(stderr, "[HOOK v2] Hijacking cuGetProcAddress pointer assignment!\n");
-        *pfn = (void*)my_cuGetProcAddress;
-        return CUDA_SUCCESS;
+        if (*pfn == memory_driver_symbol("cuGetProcAddress"))
+            *pfn = reinterpret_cast<void*>(&my_cuGetProcAddress);
+        else if (*pfn == memory_driver_symbol("cuGetProcAddress_v2"))
+            *pfn = reinterpret_cast<void*>(&my_cuGetProcAddress_v2);
+    } else {
+        redirect_driver_address(symbol, pfn);
     }
-
-    // Call the real cuGetProcAddress if it's anything else
-    if (real_cuGetProcAddress_v2 == NULL) {
-        if(cu_handle == NULL) {
-            cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
-            if(cu_handle == NULL) {
-                // fprintf(stderr, "[HOOK v2] WARNING: cu_handle == NULL\n");
-            }
-        }
-        real_cuGetProcAddress_v2 = (cuGetProcAddress_t)dlvsym(RTLD_NEXT, "cuGetProcAddress_v2", "RTLD_NEXT"); 
-        if(!real_cuGetProcAddress_v2) {
-             real_cuGetProcAddress_v2 = (cuGetProcAddress_t)real_dlsym(cu_handle, "cuGetProcAddress_v2");
-        }
-        if(real_cuGetProcAddress_v2 == NULL) {
-            // fprintf(stderr, "[HOOK v2] WARNING: real_cuGetProcAddress_v2 == NULL\n");
-        }
-    }
-    return real_cuGetProcAddress_v2(symbol, pfn, cudaVersion, flags, symbolStatus);
+    return status;
 }
 
 void* dlsym(void* handle, const char* symbol) {
@@ -543,7 +644,7 @@ void* dlsym(void* handle, const char* symbol) {
         fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
         
         // Save the real function pointer from the requested handle before we fake the return
-        real_cuGetProcAddress_v2 = (cuGetProcAddress_t)real_dlsym(handle, symbol);
+        real_cuGetProcAddress_v2 = (cuGetProcAddress_v2_t)real_dlsym(handle, symbol);
         
         return (void*)my_cuGetProcAddress_v2;
     }
@@ -561,7 +662,9 @@ void* dlsym(void* handle, const char* symbol) {
         return (void*)target_func;
     }
 
-    return real_dlsym(handle, symbol);
+    void* resolved = real_dlsym(handle, symbol);
+    if (void* hook = memory_hook_address(symbol, resolved)) return hook;
+    return resolved;
 }
 
 }

@@ -44,6 +44,15 @@ cudaError_t (*actual_cudaDeviceSynchronize)(void) = nullptr;
 cudaError_t (*actual_cudaMemset)(void*, int, size_t) = nullptr;
 cudaError_t (*actual_cudaMemsetAsync)(void*, int, size_t, cudaStream_t) = nullptr;
 
+decltype(&cuMemAlloc) actual_cuMemAlloc = nullptr;
+decltype(&cuMemAllocHost) actual_cuMemAllocHost = nullptr;
+decltype(&cuMemHostAlloc) actual_cuMemHostAlloc = nullptr;
+decltype(&cuMemFree) actual_cuMemFree = nullptr;
+decltype(&cuMemFreeHost) actual_cuMemFreeHost = nullptr;
+decltype(&cuCtxGetCurrent) actual_cuCtxGetCurrent = nullptr;
+decltype(&cuCtxPushCurrent) actual_cuCtxPushCurrent = nullptr;
+decltype(&cuCtxPopCurrent) actual_cuCtxPopCurrent = nullptr;
+
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 CUresult (*actual_cuFuncGetParamInfo)(CUfunction, size_t, size_t*, size_t*);
 
@@ -139,6 +148,31 @@ void register_functions() {
 
 	*(void **)(&actual_cuFuncGetParamInfo) = actual_dlsym(handle, "cuFuncGetParamInfo");
 	assert(actual_cuFuncGetParamInfo != NULL);
+
+    actual_cuMemAlloc = reinterpret_cast<decltype(actual_cuMemAlloc)>(
+        actual_dlsym(handle, "cuMemAlloc_v2"));
+    assert(actual_cuMemAlloc != nullptr);
+    actual_cuMemAllocHost = reinterpret_cast<decltype(actual_cuMemAllocHost)>(
+        actual_dlsym(handle, "cuMemAllocHost_v2"));
+    assert(actual_cuMemAllocHost != nullptr);
+    actual_cuMemHostAlloc = reinterpret_cast<decltype(actual_cuMemHostAlloc)>(
+        actual_dlsym(handle, "cuMemHostAlloc"));
+    assert(actual_cuMemHostAlloc != nullptr);
+    actual_cuMemFree = reinterpret_cast<decltype(actual_cuMemFree)>(
+        actual_dlsym(handle, "cuMemFree_v2"));
+    assert(actual_cuMemFree != nullptr);
+    actual_cuMemFreeHost = reinterpret_cast<decltype(actual_cuMemFreeHost)>(
+        actual_dlsym(handle, "cuMemFreeHost"));
+    assert(actual_cuMemFreeHost != nullptr);
+    actual_cuCtxGetCurrent = reinterpret_cast<decltype(actual_cuCtxGetCurrent)>(
+        actual_dlsym(handle, "cuCtxGetCurrent"));
+    assert(actual_cuCtxGetCurrent != nullptr);
+    actual_cuCtxPushCurrent = reinterpret_cast<decltype(actual_cuCtxPushCurrent)>(
+        actual_dlsym(handle, "cuCtxPushCurrent_v2"));
+    assert(actual_cuCtxPushCurrent != nullptr);
+    actual_cuCtxPopCurrent = reinterpret_cast<decltype(actual_cuCtxPopCurrent)>(
+        actual_dlsym(handle, "cuCtxPopCurrent_v2"));
+    assert(actual_cuCtxPopCurrent != nullptr);
 
 	// for wrapper, initial wrapper run.
 	*(void**)(&actual_cudaDeviceSynchronize) = dlsym(RTLD_NEXT, "cudaDeviceSynchronize");
@@ -240,6 +274,48 @@ void assign_launch() {
 	for now, the scheduler runs in round-robin fashion.
 	no priority, no streams, just running.
 */
+
+static CUresult execute_driver_memory_raw(record_type type, const record_driver_memory& record) {
+    switch (type) {
+        case RECORD_CUMEMALLOC:
+            return actual_cuMemAlloc(record.device_out, record.bytesize);
+        case RECORD_CUMEMALLOCHOST:
+            return actual_cuMemAllocHost(record.host_out, record.bytesize);
+        case RECORD_CUMEMHOSTALLOC:
+            return actual_cuMemHostAlloc(record.host_out, record.bytesize, record.flags);
+        case RECORD_CUMEMFREE:
+            return actual_cuMemFree(record.device_ptr);
+        case RECORD_CUMEMFREEHOST:
+            return actual_cuMemFreeHost(record.host_ptr);
+        default: return CUDA_ERROR_INVALID_VALUE;
+    }
+}
+
+// A null caller context must not accidentally inherit the scheduler context.
+// Temporarily unwind the context stack, then restore it in the same order.
+static CUresult execute_memory_without_context(record_type type,
+                                               const record_driver_memory& record) {
+    CUcontext current = nullptr;
+    CUresult status = actual_cuCtxGetCurrent(&current);
+    if (status != CUDA_SUCCESS) return status;
+    if (!current) return execute_driver_memory_raw(type, record);
+    status = actual_cuCtxPopCurrent(&current);
+    if (status != CUDA_SUCCESS) return status;
+    status = execute_memory_without_context(type, record);
+    CUresult restore = actual_cuCtxPushCurrent(current);
+    return status == CUDA_SUCCESS ? restore : status;
+}
+
+static CUresult execute_driver_memory(record_type type, const record_driver_memory& record) {
+    if (!record.context) return execute_memory_without_context(type, record);
+    CUresult status = actual_cuCtxPushCurrent(record.context);
+    if (status != CUDA_SUCCESS) return status;
+    status = execute_driver_memory_raw(type, record);
+    CUcontext popped = nullptr;
+    CUresult restore = actual_cuCtxPopCurrent(&popped);
+    return status == CUDA_SUCCESS ? restore : status;
+}
+
 void* scheduler(void* scarg) {
 	int turn = 0;
 	(void)scarg;
@@ -288,7 +364,23 @@ void* scheduler(void* scarg) {
 			queue_record qrecord = (*work_queue[turn]).front();
 			pthread_mutex_unlock(work_queue_mutex[turn]);
 
+            driver_memory_completion* memory_completion = nullptr;
+            CUresult memory_status = CUDA_SUCCESS;
 			switch(qrecord.type) {
+                case RECORD_CUMEMALLOC:
+                case RECORD_CUMEMALLOCHOST:
+                case RECORD_CUMEMHOSTALLOC:
+                case RECORD_CUMEMFREE:
+                case RECORD_CUMEMFREEHOST:
+                {
+                    // This runs only between complete launch/gate-release transactions.
+                    // Never call a potentially blocking free while a gate still needs
+                    // to be opened by this scheduler.
+                    const auto& record = qrecord.data.r_driver_memory;
+                    memory_completion = record.completion;
+                    memory_status = execute_driver_memory(qrecord.type, record);
+                    break;
+                }
 				case RECORD_CULAUNCHKERNEL: {
 					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
 					// fprintf(stderr, "scheduler found pending job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
@@ -358,6 +450,16 @@ void* scheduler(void* scarg) {
 			pthread_mutex_lock(work_queue_mutex[turn]);
 			(*work_queue[turn]).pop();
 			pthread_mutex_unlock(work_queue_mutex[turn]);
+
+            if (memory_completion) {
+                // Publish output-pointer writes and status only after removing the
+                // request. Do not access this caller-owned object after unlocking.
+                pthread_mutex_lock(&memory_completion->mutex);
+                memory_completion->status = memory_status;
+                memory_completion->done = true;
+                pthread_cond_signal(&memory_completion->condition);
+                pthread_mutex_unlock(&memory_completion->mutex);
+            }
 
 
 		} else {
