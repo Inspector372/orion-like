@@ -148,7 +148,133 @@ void block(int idx, pthread_mutex_t** mutexes, queue<queue_record>** kqueues) {
 	6. further all cuLaunchKernel is hooked.
 
 */
+// Resolve driver symbols without passing through our dlsym hook.
+static void* memory_driver_symbol(const char* symbol) {
+    static void* (*loader)(void*, const char*) =
+        (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
+    static void* driver = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
+    return loader && driver ? loader(driver, symbol) : NULL;
+}
+
+static int memory_client_idx() {
+    // Startup, scheduler and unregistered threads must not self-enqueue.
+    if (no_hook || !thread_ids || !work_queue || !work_queue_mutex) return -1;
+    for (int i = 0; i < THREAD_NUM; ++i)
+        if (pthread_equal(pthread_self(), thread_ids[i])) return i;
+    return -1;
+}
+
 extern "C" {
+
+CUresult CUDAAPI cuMemAlloc(CUdeviceptr* dptr, size_t bytesize) {
+    static CUresult (CUDAAPI *real_cuMemAlloc)(CUdeviceptr*, size_t) =
+        (CUresult (CUDAAPI *)(CUdeviceptr*, size_t))memory_driver_symbol("cuMemAlloc_v2");
+    if (real_cuMemAlloc == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real_cuMemAlloc(dptr, bytesize);
+
+    CUresult status = CUDA_SUCCESS;
+    record_cuMemAlloc new_record = {dptr, bytesize, &status};
+    union record_data new_record_data;
+    new_record_data.r_cuMemAlloc = new_record;
+    queue_record new_qrecord = {RECORD_CUMEMALLOC, new_record_data};
+
+    pthread_mutex_lock(work_queue_mutex[idx]);
+    work_queue[idx]->push(new_qrecord);
+    pthread_mutex_unlock(work_queue_mutex[idx]);
+
+    block(idx, work_queue_mutex, work_queue);
+    return status;
+}
+
+
+CUresult CUDAAPI cuMemAllocHost(void** pp, size_t bytesize) {
+    static CUresult (CUDAAPI *real_cuMemAllocHost)(void**, size_t) =
+        (CUresult (CUDAAPI *)(void**, size_t))memory_driver_symbol("cuMemAllocHost_v2");
+    if (real_cuMemAllocHost == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real_cuMemAllocHost(pp, bytesize);
+
+    CUresult status = CUDA_SUCCESS;
+    record_cuMemAllocHost new_record = {pp, bytesize, &status};
+    union record_data new_record_data;
+    new_record_data.r_cuMemAllocHost = new_record;
+    queue_record new_qrecord = {RECORD_CUMEMALLOCHOST, new_record_data};
+
+    pthread_mutex_lock(work_queue_mutex[idx]);
+    work_queue[idx]->push(new_qrecord);
+    pthread_mutex_unlock(work_queue_mutex[idx]);
+
+    block(idx, work_queue_mutex, work_queue);
+    return status;
+}
+
+
+CUresult CUDAAPI cuMemHostAlloc(void** pp, size_t bytesize, unsigned int flags) {
+    static CUresult (CUDAAPI *real_cuMemHostAlloc)(void**, size_t, unsigned int) =
+        (CUresult (CUDAAPI *)(void**, size_t, unsigned int))memory_driver_symbol("cuMemHostAlloc");
+    if (real_cuMemHostAlloc == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real_cuMemHostAlloc(pp, bytesize, flags);
+
+    CUresult status = CUDA_SUCCESS;
+    record_cuMemHostAlloc new_record = {pp, bytesize, flags, &status};
+    union record_data new_record_data;
+    new_record_data.r_cuMemHostAlloc = new_record;
+    queue_record new_qrecord = {RECORD_CUMEMHOSTALLOC, new_record_data};
+
+    pthread_mutex_lock(work_queue_mutex[idx]);
+    work_queue[idx]->push(new_qrecord);
+    pthread_mutex_unlock(work_queue_mutex[idx]);
+
+    block(idx, work_queue_mutex, work_queue);
+    return status;
+}
+
+
+CUresult CUDAAPI cuMemFree(CUdeviceptr dptr) {
+    static CUresult (CUDAAPI *real_cuMemFree)(CUdeviceptr) =
+        (CUresult (CUDAAPI *)(CUdeviceptr))memory_driver_symbol("cuMemFree_v2");
+    if (real_cuMemFree == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real_cuMemFree(dptr);
+
+    CUresult status = CUDA_SUCCESS;
+    record_cuMemFree new_record = {dptr, &status};
+    union record_data new_record_data;
+    new_record_data.r_cuMemFree = new_record;
+    queue_record new_qrecord = {RECORD_CUMEMFREE, new_record_data};
+
+    pthread_mutex_lock(work_queue_mutex[idx]);
+    work_queue[idx]->push(new_qrecord);
+    pthread_mutex_unlock(work_queue_mutex[idx]);
+
+    block(idx, work_queue_mutex, work_queue);
+    return status;
+}
+
+
+CUresult CUDAAPI cuMemFreeHost(void* p) {
+    static CUresult (CUDAAPI *real_cuMemFreeHost)(void*) =
+        (CUresult (CUDAAPI *)(void*))memory_driver_symbol("cuMemFreeHost");
+    if (real_cuMemFreeHost == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real_cuMemFreeHost(p);
+
+    CUresult status = CUDA_SUCCESS;
+    record_cuMemFreeHost new_record = {p, &status};
+    union record_data new_record_data;
+    new_record_data.r_cuMemFreeHost = new_record;
+    queue_record new_qrecord = {RECORD_CUMEMFREEHOST, new_record_data};
+
+    pthread_mutex_lock(work_queue_mutex[idx]);
+    work_queue[idx]->push(new_qrecord);
+    pthread_mutex_unlock(work_queue_mutex[idx]);
+
+    block(idx, work_queue_mutex, work_queue);
+    return status;
+}
+
 
 /*
 	*exact* behavior of cudaDeviceSynchronize() need to be inspected.
@@ -436,6 +562,71 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t 
 */
 
 CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
+
+    if (symbol && (strcmp(symbol, "cuMemAlloc") == 0 || strcmp(symbol, "cuMemAlloc_v2") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t))
+                memory_driver_symbol("cuGetProcAddress");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemAlloc_v2"))
+            *pfn = (void*)cuMemAlloc;
+        return status;
+    }
+
+    if (symbol && (strcmp(symbol, "cuMemAllocHost") == 0 || strcmp(symbol, "cuMemAllocHost_v2") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t))
+                memory_driver_symbol("cuGetProcAddress");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemAllocHost_v2"))
+            *pfn = (void*)cuMemAllocHost;
+        return status;
+    }
+
+    if (symbol && (strcmp(symbol, "cuMemHostAlloc") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t))
+                memory_driver_symbol("cuGetProcAddress");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemHostAlloc"))
+            *pfn = (void*)cuMemHostAlloc;
+        return status;
+    }
+
+    if (symbol && (strcmp(symbol, "cuMemFree") == 0 || strcmp(symbol, "cuMemFree_v2") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t))
+                memory_driver_symbol("cuGetProcAddress");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemFree_v2"))
+            *pfn = (void*)cuMemFree;
+        return status;
+    }
+
+    if (symbol && (strcmp(symbol, "cuMemFreeHost") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t))
+                memory_driver_symbol("cuGetProcAddress");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemFreeHost"))
+            *pfn = (void*)cuMemFreeHost;
+        return status;
+    }
     // fprintf(stderr, "[HOOK v1] Inside cuGetProcAddress looking for: %s\n", symbol);
 
     if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
@@ -486,6 +677,71 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
 }
 
 CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
+
+    if (symbol && (strcmp(symbol, "cuMemAlloc") == 0 || strcmp(symbol, "cuMemAlloc_v2") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*))
+                memory_driver_symbol("cuGetProcAddress_v2");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags, (CUdriverProcAddressQueryResult*)symbolStatus);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemAlloc_v2"))
+            *pfn = (void*)cuMemAlloc;
+        return status;
+    }
+
+    if (symbol && (strcmp(symbol, "cuMemAllocHost") == 0 || strcmp(symbol, "cuMemAllocHost_v2") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*))
+                memory_driver_symbol("cuGetProcAddress_v2");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags, (CUdriverProcAddressQueryResult*)symbolStatus);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemAllocHost_v2"))
+            *pfn = (void*)cuMemAllocHost;
+        return status;
+    }
+
+    if (symbol && (strcmp(symbol, "cuMemHostAlloc") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*))
+                memory_driver_symbol("cuGetProcAddress_v2");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags, (CUdriverProcAddressQueryResult*)symbolStatus);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemHostAlloc"))
+            *pfn = (void*)cuMemHostAlloc;
+        return status;
+    }
+
+    if (symbol && (strcmp(symbol, "cuMemFree") == 0 || strcmp(symbol, "cuMemFree_v2") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*))
+                memory_driver_symbol("cuGetProcAddress_v2");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags, (CUdriverProcAddressQueryResult*)symbolStatus);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemFree_v2"))
+            *pfn = (void*)cuMemFree;
+        return status;
+    }
+
+    if (symbol && (strcmp(symbol, "cuMemFreeHost") == 0)) {
+        // Let the driver validate the lookup and select its ABI first.
+        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*) =
+            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*))
+                memory_driver_symbol("cuGetProcAddress_v2");
+        if (resolve == NULL) return CUDA_ERROR_NOT_INITIALIZED;
+        CUresult status = resolve(symbol, pfn, cudaVersion, flags, (CUdriverProcAddressQueryResult*)symbolStatus);
+        if (status == CUDA_SUCCESS && pfn && *pfn &&
+            *pfn == memory_driver_symbol("cuMemFreeHost"))
+            *pfn = (void*)cuMemFreeHost;
+        return status;
+    }
     // fprintf(stderr, "[HOOK v2] Inside cuGetProcAddress_v2 looking for: %s\n", symbol);
 
     if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
@@ -527,6 +783,42 @@ void* dlsym(void* handle, const char* symbol) {
         if (real_dlsym == NULL) {
             real_dlsym = (void* (*)(void*, const char*))dlopen("libdl.so.2", RTLD_NOW); 
         }
+    }
+
+
+    if (symbol && strcmp(symbol, "cuMemAlloc_v2") == 0) {
+        void* resolved = real_dlsym(handle, symbol);
+        if (resolved && resolved == memory_driver_symbol("cuMemAlloc_v2"))
+            return (void*)cuMemAlloc;
+        return resolved;
+    }
+
+    if (symbol && strcmp(symbol, "cuMemAllocHost_v2") == 0) {
+        void* resolved = real_dlsym(handle, symbol);
+        if (resolved && resolved == memory_driver_symbol("cuMemAllocHost_v2"))
+            return (void*)cuMemAllocHost;
+        return resolved;
+    }
+
+    if (symbol && strcmp(symbol, "cuMemHostAlloc") == 0) {
+        void* resolved = real_dlsym(handle, symbol);
+        if (resolved && resolved == memory_driver_symbol("cuMemHostAlloc"))
+            return (void*)cuMemHostAlloc;
+        return resolved;
+    }
+
+    if (symbol && strcmp(symbol, "cuMemFree_v2") == 0) {
+        void* resolved = real_dlsym(handle, symbol);
+        if (resolved && resolved == memory_driver_symbol("cuMemFree_v2"))
+            return (void*)cuMemFree;
+        return resolved;
+    }
+
+    if (symbol && strcmp(symbol, "cuMemFreeHost") == 0) {
+        void* resolved = real_dlsym(handle, symbol);
+        if (resolved && resolved == memory_driver_symbol("cuMemFreeHost"))
+            return (void*)cuMemFreeHost;
+        return resolved;
     }
 
     // CRUCIAL: Intercept libcudart trying to look up cuGetProcAddress

@@ -241,6 +241,26 @@ void assign_launch() {
 	no priority, no streams, just running.
 */
 void* scheduler(void* scarg) {
+    void* memory_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
+    void* (*memory_dlsym)(void*, const char*) =
+        (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
+    assert(memory_handle != NULL && memory_dlsym != NULL);
+    CUresult (CUDAAPI *actual_cuMemAlloc)(CUdeviceptr*, size_t) =
+        (CUresult (CUDAAPI *)(CUdeviceptr*, size_t))memory_dlsym(memory_handle, "cuMemAlloc_v2");
+    assert(actual_cuMemAlloc != NULL);
+    CUresult (CUDAAPI *actual_cuMemAllocHost)(void**, size_t) =
+        (CUresult (CUDAAPI *)(void**, size_t))memory_dlsym(memory_handle, "cuMemAllocHost_v2");
+    assert(actual_cuMemAllocHost != NULL);
+    CUresult (CUDAAPI *actual_cuMemHostAlloc)(void**, size_t, unsigned int) =
+        (CUresult (CUDAAPI *)(void**, size_t, unsigned int))memory_dlsym(memory_handle, "cuMemHostAlloc");
+    assert(actual_cuMemHostAlloc != NULL);
+    CUresult (CUDAAPI *actual_cuMemFree)(CUdeviceptr) =
+        (CUresult (CUDAAPI *)(CUdeviceptr))memory_dlsym(memory_handle, "cuMemFree_v2");
+    assert(actual_cuMemFree != NULL);
+    CUresult (CUDAAPI *actual_cuMemFreeHost)(void*) =
+        (CUresult (CUDAAPI *)(void*))memory_dlsym(memory_handle, "cuMemFreeHost");
+    assert(actual_cuMemFreeHost != NULL);
+
 	int turn = 0;
 	(void)scarg;
     pthread_mutex_lock(&start_mutex);
@@ -289,6 +309,37 @@ void* scheduler(void* scarg) {
 			pthread_mutex_unlock(work_queue_mutex[turn]);
 
 			switch(qrecord.type) {
+
+                case RECORD_CUMEMALLOC: {
+                    record_cuMemAlloc record = qrecord.data.r_cuMemAlloc;
+                    *record.status = actual_cuMemAlloc(record.dptr, record.bytesize);
+                }
+                break;
+
+                case RECORD_CUMEMALLOCHOST: {
+                    record_cuMemAllocHost record = qrecord.data.r_cuMemAllocHost;
+                    *record.status = actual_cuMemAllocHost(record.pp, record.bytesize);
+                }
+                break;
+
+                case RECORD_CUMEMHOSTALLOC: {
+                    record_cuMemHostAlloc record = qrecord.data.r_cuMemHostAlloc;
+                    *record.status = actual_cuMemHostAlloc(record.pp, record.bytesize, record.flags);
+                }
+                break;
+
+                case RECORD_CUMEMFREE: {
+                    record_cuMemFree record = qrecord.data.r_cuMemFree;
+                    *record.status = actual_cuMemFree(record.dptr);
+                }
+                break;
+
+                case RECORD_CUMEMFREEHOST: {
+                    record_cuMemFreeHost record = qrecord.data.r_cuMemFreeHost;
+                    *record.status = actual_cuMemFreeHost(record.p);
+                }
+                break;
+
 				case RECORD_CULAUNCHKERNEL: {
 					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
 					// fprintf(stderr, "scheduler found pending job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);

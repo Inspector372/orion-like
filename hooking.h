@@ -6,6 +6,11 @@ enum record_type {
 	RECORD_CUDAEVENT,
 	RECORD_CUDAMEMSET,
 	RECORD_CUDAMEMSETASYNC,
+	RECORD_CUMEMALLOC,
+	RECORD_CUMEMALLOCHOST,
+	RECORD_CUMEMHOSTALLOC,
+	RECORD_CUMEMFREE,
+	RECORD_CUMEMFREEHOST,
 	OTHERS
 };
 
@@ -43,7 +48,41 @@ typedef struct record_cudaMemsetAsync {
 	cudaStream_t stream;
 } record_cudaMemsetAsync;
 
+typedef struct record_cuMemAlloc {
+	CUdeviceptr* dptr;
+	size_t bytesize;
+	CUresult* status; // Caller stays in block() until the scheduler pops this record.
+} record_cuMemAlloc;
+
+typedef struct record_cuMemAllocHost {
+	void** pp;
+	size_t bytesize;
+	CUresult* status; // Caller stays in block() until the scheduler pops this record.
+} record_cuMemAllocHost;
+
+typedef struct record_cuMemHostAlloc {
+	void** pp;
+	size_t bytesize;
+	unsigned int flags;
+	CUresult* status; // Caller stays in block() until the scheduler pops this record.
+} record_cuMemHostAlloc;
+
+typedef struct record_cuMemFree {
+	CUdeviceptr dptr;
+	CUresult* status; // Caller stays in block() until the scheduler pops this record.
+} record_cuMemFree;
+
+typedef struct record_cuMemFreeHost {
+	void* p;
+	CUresult* status; // Caller stays in block() until the scheduler pops this record.
+} record_cuMemFreeHost;
+
 union record_data {
+	record_cuMemAlloc r_cuMemAlloc;
+	record_cuMemAllocHost r_cuMemAllocHost;
+	record_cuMemHostAlloc r_cuMemHostAlloc;
+	record_cuMemFree r_cuMemFree;
+	record_cuMemFreeHost r_cuMemFreeHost;
 	record_cuLaunchKernel r_cuLaunchKernel;
 	record_cudaEvent r_cudaEvent;
 	record_cudaMemset r_cudaMemset;
