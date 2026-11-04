@@ -1,8 +1,3 @@
-#pragma once
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <pthread.h>
-#include <cstdint>
 
 #define THREAD_NUM 9
 
@@ -11,11 +6,6 @@ enum record_type {
 	RECORD_CUDAEVENT,
 	RECORD_CUDAMEMSET,
 	RECORD_CUDAMEMSETASYNC,
-	RECORD_CUMEMALLOC,
-	RECORD_CUMEMALLOCHOST,
-	RECORD_CUMEMHOSTALLOC,
-	RECORD_CUMEMFREE,
-	RECORD_CUMEMFREEHOST,
 	OTHERS
 };
 
@@ -53,27 +43,7 @@ typedef struct record_cudaMemsetAsync {
 	cudaStream_t stream;
 } record_cudaMemsetAsync;
 
-// Owned by the blocked caller; scheduler publishes completion after queue pop.
-struct driver_memory_completion {
-    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t condition = PTHREAD_COND_INITIALIZER;
-    bool done = false;
-    CUresult status = CUDA_SUCCESS;
-};
-
-struct record_driver_memory {
-    CUcontext context;
-    CUdeviceptr* device_out;
-    void** host_out;
-    size_t bytesize;
-    unsigned int flags;
-    CUdeviceptr device_ptr;
-    void* host_ptr;
-    driver_memory_completion* completion;
-};
-
 union record_data {
-    record_driver_memory r_driver_memory;
 	record_cuLaunchKernel r_cuLaunchKernel;
 	record_cudaEvent r_cudaEvent;
 	record_cudaMemset r_cudaMemset;
