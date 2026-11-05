@@ -57,16 +57,13 @@ bool no_hook = true;
 pthread_t* thread_ids;
 
 /* 
-	Kernel Queue. This queues cuLaunchKernel, and its derivatives.
-	cudaMemset/Async() can be a kernel, so it goes to kernel queue.
-	For now, memory operations also go here.
+	Work queue, which corresponds to the 'stream'.
+    Each time the client creates a stream, a work queue is newly created.
+    Non-stream operations go to the default queue.
 */
 queue<queue_record>** work_queue;
 pthread_mutex_t** work_queue_mutex;
 
-/*
-	TODO: create Memory Queue, which contains HtoD/DtoH memory operations.
-*/
 
 /*
 	Real instances of cuda APIs.
@@ -323,13 +320,13 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 		return real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
 	}
 	int idx = get_idx();
-	fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
+	// fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
 	cudaLaunchKernel_launched[idx] = true;
 	cudaError_t err = real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
 	cudaLaunchKernel_launched[idx] = false;
-	fprintf(stderr, "[cudaHook] block-start from %d!\n", idx);
+	// fprintf(stderr, "[cudaHook] block-start from %d!\n", idx);
 	block(idx, work_queue_mutex, work_queue);
-	fprintf(stderr, "[cudaHook] block-end from %d!\n", idx);
+	// fprintf(stderr, "[cudaHook] block-end from %d!\n", idx);
 	
 	return err;
 }
@@ -403,7 +400,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 }
 
 CUresult cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) {
-	fprintf(stderr, "cuLaunchKernelEx is captured!\n");
+	fprintf(stderr, "Warning: (non-implemented) cuLaunchKernelEx is captured!\n");
 	if (real_cuLaunchKernelEx == NULL) {
         if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
         real_cuLaunchKernelEx = (CUresult (*)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra))real_dlsym(cu_handle, "cuLaunchKernelEx");
@@ -422,7 +419,7 @@ CUresult cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** ker
 CUresult cuLaunchKernel_ptsz(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
                         unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
-	fprintf(stderr, "cuLaunchKernel_ptsz is captured!\n");
+	fprintf(stderr, "Warning: (non-implemented) cuLaunchKernel_ptsz is captured!\n");
 	if (real_cuLaunchKernel_ptsz == NULL) {
         if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
         real_cuLaunchKernel_ptsz = (CUresult (*)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**))real_dlsym(cu_handle, "cuLaunchKernel_ptsz");
@@ -439,7 +436,7 @@ CUresult cuLaunchKernel_ptsz(CUfunction f, unsigned int gridDimX, unsigned int g
 }
 
 CUresult cuLaunchKernelEx_ptsz(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) {
-	fprintf(stderr, "cuLaunchKernelEx_ptsz is captured!\n");
+	fprintf(stderr, "Warning: (non-implemented) cuLaunchKernelEx_ptsz is captured!\n");
 	if (real_cuLaunchKernelEx_ptsz == NULL) {
         if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
         real_cuLaunchKernelEx_ptsz = (CUresult (*)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra))real_dlsym(cu_handle, "cuLaunchKernelEx_ptsz");
@@ -455,7 +452,7 @@ CUresult cuLaunchKernelEx_ptsz(const CUlaunchConfig* config, CUfunction f, void*
 }
 
 CUresult cuGraphLaunch(CUgraphExec hGraphExec, CUstream hStream) {
-	fprintf(stderr, "cuGraphLaunch is captured!\n");
+	fprintf(stderr, "Warning: (non-implemented) cuGraphLaunch is captured!\n");
 	if (real_cuGraphLaunch == NULL) {
         if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
         real_cuGraphLaunch = (CUresult (*)(CUgraphExec, CUstream))real_dlsym(cu_handle, "cuGraphLaunch");
@@ -473,7 +470,7 @@ CUresult cuGraphLaunch(CUgraphExec hGraphExec, CUstream hStream) {
 CUresult cuLaunchCooperativeKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
                         		unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
                         		unsigned int sharedMemBytes, CUstream hStream, void** kernelParams) {
-	fprintf(stderr, "cuLaunchCooperativeKernel is captured!\n");
+	fprintf(stderr, "Warning: (non-implemented) cuLaunchCooperativeKernel is captured!\n");
 	if (real_cuLaunchCooperativeKernel == NULL) {
         if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
         real_cuLaunchCooperativeKernel = (CUresult (*)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**))real_dlsym(cu_handle, "cuLaunchCooperativeKernel");
