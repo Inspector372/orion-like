@@ -71,14 +71,13 @@ extern int libsmctrl_get_tpc_info(uint32_t* num_tpcs, int dev);
 extern int libsmctrl_get_tpc_info_cuda(uint32_t* num_tpcs, int cuda_dev);
 
 extern void libsmctrl_false_launch_callback();
-extern void assign_hash_insert(void*);
-
-extern uint32_t launch_lidx;
-extern uint32_t launch_hidx;
-extern uint32_t launch_signal;
-extern uint32_t callback_mode;
-extern uint64_t last_key;
-extern AtomMetaData last_metadata;
+#define ATOM_SLOT_COUNT 32
+/* Descriptor after the slot-specific wrappers belongs to the no-op probe. */
+#define ATOM_PROBE_ENTRY ATOM_SLOT_COUNT
+void atom_capture_entry(unsigned entry);
+void atom_probe_entry(void);
+void atom_wrap_entry(unsigned slot, uint64_t original_pc);
+uint64_t atom_finish_entry(void);
 
 #ifdef __cplusplus
 }

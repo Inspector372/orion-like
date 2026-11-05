@@ -1,258 +1,113 @@
-/*
-    wrapper.cu
-
-    Defines wrapper.
-
-*/ 
-#define MAP_LENGTH 2048
-#define MAGIC 0x2020064020200640ULL
-
 #include <stdio.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include <stdlib.h>
 #include "wrapper.h"
+#include "libsmctrl.h"
 
-__device__ AtomMetaData atomMetaDataTable[MAP_LENGTH];
-void* atomMetaDataTable_symbol_addr;
-AtomMetaData* atomMetaDataTable_cache;
+struct AtomMetaData {
+    uint64_t kernel;
+    uint32_t lidx, hidx;
+};
 
+static __device__ AtomMetaData device_metadata[ATOM_SLOT_COUNT];
+static CUdeviceptr metadata_address;
+static AtomMetaData* staging;
+static struct {
+    CUevent ready, done;
+    bool busy;
+} slots[ATOM_SLOT_COUNT];
 
-/*
-    When a real_cuLaunchKernel launch happens, OS creates an event and saves (key, event) pair.
-    OS will try to 'reap' it by calling cudaEventQuery(), and if its cudaSuccess it will call table_delete(through hash_delete(key)).
-    
-    One problem is that OS may try to insert the key that is already used when real_cuLaunchKernel happens.
-    When that happens, we need to do this:
-    1. change (key, old_metadata) -> (key, new_metadata) of atomMetaDataTable and its cache.
-    2. insert (key, new_event) of release_queue.
-    3. mark (key, old_event) as REAPED.
-
-    It's safe to just change key of old metadata, because GPU actually does not use that key address anymore.
-    However, release_queue entry MUST be newly inserted because cudaEvent will be eventually signaled and OS will try to reap it.
-
-*/
-ReleaseQueueEntry release_queue[RELEASE_QUEUE_LENGTH];
-
-/*
-    insert and delete entry from atomMetaDataTable.
-    hashing mechanism is just random now, if there is better way, it can be changed later.
-    
-    because of the internal synchronizing mechanism of cudaLaunchKernel(),
-    those functions should not be used at the same time with cudaLaunchKernel(),
-    otherwise it will cause a deadlock.
-
-    Table should be ONLY modified using those APIs, otherwise it will break host cacheing mechanism.
-    both insert() and delete() check atomMetaDataTable_host at host side to decide which block to remove,
-    and atomMetaDataTable_cache MUST be updated too.
-
-*/
-void table_insert(uint64_t key, AtomMetaData value) {
-    uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
-    AtomMetaData metadata;
-
-    CUevent copy;
-    cuEventCreate(&copy, CU_EVENT_DISABLE_TIMING);
-
-    // cudaEvent_t copy;
-    // cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
-
-    // fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
-    
-    // check if the entry is already there!
-    for(int i = 0; i < MAP_LENGTH; i++) {
-        if(atomMetaDataTable_cache[i].key == key) {
-            atomMetaDataTable_cache[i] = value;
-            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[i], sizeof(AtomMetaData), sizeof(AtomMetaData) * i, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
-                ;
-            }
-            while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
-                ;
-            }
-            for(;;) {
-                CUresult status = cuEventQuery(copy);
-                if (status == CUDA_SUCCESS) break;
-                if (status != CUDA_ERROR_NOT_READY) {
-                    fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
-                    std::exit(-1);
-                }
-            }
-            // cuEventSynchronize(copy);
-            //cudaEventRecord(copy, metadata_pass_stream);
-            //cudaEventSynchronize(copy);
-            release_queue_mark_as_reaped(key);
-            cuEventDestroy(copy);
-            //cudaEventDestroy(copy);
-
-            // If %gridid is unique, we should not fall here.
-            fprintf(stderr, "Problem: gridid is not unique or tried to insert incorrect value.\n");
-            std::exit(-1);
-            return;
-        }
-    }
-
-    for(int i = 0; i < MAP_LENGTH; i++) {
-        if(atomMetaDataTable_cache[idx].key == 0) {
-            atomMetaDataTable_cache[idx] = value;
-            while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
-                ;
-            }
-            while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
-                ;
-            }
-            for(;;) {
-                CUresult status = cuEventQuery(copy);
-                if (status == CUDA_SUCCESS) break;
-                if (status != CUDA_ERROR_NOT_READY) {
-                    fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
-                    std::exit(-1);
-                }
-            }
-            // cuEventSynchronize(copy);
-            // cudaEventRecord(copy, metadata_pass_stream);
-            // cudaEventSynchronize(copy);
-            break;
-        }
-        idx = (idx + 1) % MAP_LENGTH;
-    }
-    cuEventDestroy(copy);
-    // cudaEventDestroy(copy);
-    return;
-
+// The entry address selects the slot, leaving the client's parameter buffer intact.
+template<int Slot>
+__global__ void atom_wrapper() {
+    const AtomMetaData meta = device_metadata[Slot];
+    size_t block = ((size_t)blockIdx.z * gridDim.y + blockIdx.y) * gridDim.x + blockIdx.x;
+    if (block >= meta.lidx && block < meta.hidx)
+        ((void (*)())meta.kernel)();
 }
 
-void table_delete(uint64_t key) {
-    uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
-    AtomMetaData metadata;
-    metadata.key = 0;
+static __global__ void probe_stub() {}
 
-    CUevent copy;
-    cuEventCreate(&copy, CU_EVENT_DISABLE_TIMING);
-    // cudaEvent_t copy;
-    // cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
-    
-    for(int i = 0; i < MAP_LENGTH; i++) {
-        if(atomMetaDataTable_cache[idx].key == key) {
-            atomMetaDataTable_cache[idx].key = 0;
-            while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
-                ;
-            }
-            while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
-                ;
-            }
-            for(;;) {
-                CUresult status = cuEventQuery(copy);
-                if (status == CUDA_SUCCESS) break;
-                if (status != CUDA_ERROR_NOT_READY) {
-                    fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
-                    std::exit(-1);
-                }
-            }
-            // cuEventSynchronize(copy);
-            // cudaEventRecord(copy, metadata_pass_stream);
-            // cudaEventSynchronize(copy);
-            break;
-        }
-        idx = (idx + 1) % MAP_LENGTH;
-    }
-    cuEventDestroy(copy);
-    // cudaEventDestroy(copy);
-    return;
-}
-
-/*
-    Helper functions for release_queue.
-*/
-void release_queue_insert(uint64_t key, cudaEvent_t event, CUdeviceptr launchblock) {
-    for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
-        if(release_queue[i].key == 0) {
-            release_queue[i].key = key;
-            release_queue[i].event = event;
-            release_queue[i].reaped = false;
-            release_queue[i].launchblock = launchblock;
-            return;
-        }
-    }
-    fprintf(stderr, "release queue is full\n");
-    std::exit(-1);
-}
-
-void release_queue_mark_as_reaped(uint64_t key) {
-    for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
-        if(release_queue[i].key == key && !release_queue[i].reaped) {
-            release_queue[i].reaped = true;
-            return;
-        }
+void check_atom_driver(CUresult status, const char* operation) {
+    if (status != CUDA_SUCCESS) {
+        fprintf(stderr, "%s failed (%d)\n", operation, (int)status);
+        exit(EXIT_FAILURE);
     }
 }
 
-void release_queue_delete(uint64_t key) {
-    for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
-        if(release_queue[i].key == key) {
-            release_queue[i].key = 0;
-            release_queue[i].event = 0;
-            release_queue[i].reaped = false;
-            return;
-        }
+static void check_runtime(cudaError_t status, const char* operation) {
+    if (status != cudaSuccess) {
+        fprintf(stderr, "%s failed: %s\n", operation, cudaGetErrorString(status));
+        exit(EXIT_FAILURE);
     }
 }
 
-/*
-    Kernel wrapper.
-    
-    
-
-*/
-__global__ void wrapper(const __grid_constant__ uint64_t argu) {
-    if(argu == MAGIC) return; // For initial_wrapper_run().
-
-    // uint64_t ptr = (uint64_t)&argu;
-    // uint64_t idx = (ptr * 11400714819323198485ULL) % MAP_LENGTH;
-    uint64_t gid;
-    asm volatile("mov.u64 %0, %%gridid;" : "=l"(gid));
-    uint64_t idx = (gid * 11400714819323198485ULL) % MAP_LENGTH;
-    
-
-
-    int i;
-    for(i = 0; i < MAP_LENGTH; i++) {
-        if(atomMetaDataTable[idx].key == gid) {
-            break;
-        }
-        idx = (idx + 1) % MAP_LENGTH;
-    }
-
-    void* kernel = (void*)atomMetaDataTable[idx].kernel;
-    uint32_t lidx = atomMetaDataTable[idx].lidx;
-    uint32_t hidx = atomMetaDataTable[idx].hidx;
-
-    size_t block_idx = blockIdx.z * gridDim.y * gridDim.x + blockIdx.y * gridDim.x + blockIdx.x;
-    // if(threadIdx.x + blockIdx.x * blockDim.x == 1) printf("key : %lx, lidx : %d, hidx : %d\n", gid, lidx, hidx);
-    if (block_idx < lidx || block_idx >= hidx) return;
-
-    ((func_ptr_t)kernel)();
-} 
-    
 void setup_metadata() {
-    AtomMetaData zero_ptrs[MAP_LENGTH];
-    for(int i = 0; i < MAP_LENGTH; i++) {
-        zero_ptrs[i].key = 0;
+    void* address;
+    check_runtime(cudaGetSymbolAddress(&address, device_metadata), "get metadata address");
+    metadata_address = (CUdeviceptr)address;
+    check_runtime(cudaMallocHost((void**)&staging, sizeof(device_metadata)), "allocate metadata staging");
+    for (int i = 0; i < ATOM_SLOT_COUNT; ++i) {
+        check_atom_driver(cuEventCreate(&slots[i].ready, CU_EVENT_DISABLE_TIMING), "create ready event");
+        check_atom_driver(cuEventCreate(&slots[i].done, CU_EVENT_DISABLE_TIMING), "create done event");
     }
-    cudaMemcpyToSymbol(atomMetaDataTable, &zero_ptrs, sizeof(zero_ptrs));
-    cudaMallocHost((void**)&atomMetaDataTable_cache, sizeof(AtomMetaData) * MAP_LENGTH);
-    for(int i = 0; i < MAP_LENGTH; i++) {
-        atomMetaDataTable_cache[i] = AtomMetaData{};
-    }
-    cudaGetSymbolAddress(&atomMetaDataTable_symbol_addr, atomMetaDataTable);
 }
 
+template<int Count>
+static void capture_wrappers() {
+    capture_wrappers<Count - 1>();
+    atom_capture_entry(Count - 1);
+    atom_wrapper<Count - 1><<<1, 1>>>();
+    check_runtime(cudaGetLastError(), "capture wrapper launch");
+    atom_finish_entry();
+}
 
-/*
-    Runs only once when callback_mode = 0.
-*/
+template<> void capture_wrappers<0>() {}
+
 void initial_wrapper_run() {
-    uint64_t fakearg = MAGIC;
-    wrapper<<<1, 1>>>(fakearg);
-    (*actual_cudaDeviceSynchronize)();
+    // Device globals start zeroed, so each bootstrap wrapper has an empty range.
+    capture_wrappers<ATOM_SLOT_COUNT>();
+    atom_capture_entry(ATOM_PROBE_ENTRY);
+    probe_stub<<<1, 1>>>();
+    check_runtime(cudaGetLastError(), "capture probe launch");
+    atom_finish_entry();
+    check_runtime(actual_cudaDeviceSynchronize(), "initialize atom entries");
 }
 
+int acquire_atom_slot() {
+    static unsigned next;
+    for (unsigned i = 0; i < ATOM_SLOT_COUNT; ++i) {
+        unsigned slot = (next + i) % ATOM_SLOT_COUNT;
+        if (slots[slot].busy) {
+            CUresult status = cuEventQuery(slots[slot].done);
+            if (status == CUDA_ERROR_NOT_READY) continue;
+            check_atom_driver(status, "query atom completion");
+        }
+        slots[slot].busy = true;
+        next = (slot + 1) % ATOM_SLOT_COUNT;
+        return slot;
+    }
+    return -1;
+}
 
+void prepare_atom_slot(int slot, uint64_t kernel, uint32_t lidx, uint32_t hidx, CUstream stream) {
+    staging[slot] = AtomMetaData{kernel, lidx, hidx};
+    check_atom_driver(cuMemcpyHtoDAsync(metadata_address + slot * sizeof(AtomMetaData),
+        &staging[slot], sizeof(AtomMetaData), metadata_pass_stream), "upload atom metadata");
+    check_atom_driver(cuEventRecord(slots[slot].ready, metadata_pass_stream), "record metadata ready");
+    check_atom_driver(cuStreamWaitEvent(stream, slots[slot].ready, 0), "wait for metadata");
+}
+
+void finish_atom_slot(int slot, CUstream stream) {
+    check_atom_driver(cuEventRecord(slots[slot].done, stream), "record atom completion");
+}
+
+void shutdown_metadata() {
+    for (int i = 0; i < ATOM_SLOT_COUNT; ++i) {
+        if (slots[i].busy)
+            check_atom_driver(cuEventSynchronize(slots[i].done), "drain atom");
+        check_atom_driver(cuEventDestroy(slots[i].ready), "destroy ready event");
+        check_atom_driver(cuEventDestroy(slots[i].done), "destroy done event");
+    }
+    check_runtime(cudaFreeHost(staging), "free metadata staging");
+    check_runtime(cudaStreamDestroy(metadata_pass_stream), "destroy metadata stream");
+}

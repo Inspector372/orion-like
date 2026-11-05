@@ -31,48 +31,36 @@ struct global_sm_control {
 } __attribute__((packed));
 
 
-/*
-	AtomMetaData structure that is used on wrapper.
-	Additional fields can be added.
+#include "libsmctrl.h"
 
-	'signal' is special field that detects other launches outside host-call.
-	its used for debugging purpose.
-*/
-typedef struct AtomMetaData_t{
-	uint64_t key;
-    uint64_t kernel; 
-    uint32_t lidx;
-    uint32_t hidx; 
+struct entry_descriptor {
+    uint32_t lower, upper;
+    uint8_t registers, registers_v;
+};
 
-	uint32_t signal;
-} AtomMetaData_t;
+static struct entry_descriptor entries[ATOM_SLOT_COUNT + 1];
+enum entry_mode { IDLE, CAPTURE, PROBE, WRAP, OBSERVED };
+static __thread enum entry_mode mode;
+static __thread unsigned selected_entry;
+static __thread uint64_t expected_pc, observed_pc;
 
-/*
-	Static Variables.
-*/
-static uint32_t wrapper_progaddr_upper;
-static uint32_t wrapper_progaddr_lower;
-static uint8_t wrapper_register_cnt;
-static uint8_t wrapper_register_cnt_v;
+static void arm_entry(enum entry_mode next, unsigned entry, uint64_t pc) {
+    if (mode != IDLE || entry > ATOM_PROBE_ENTRY)
+        abort(1, EINVAL, "Invalid atom callback state");
+    selected_entry = entry;
+    expected_pc = pc;
+    mode = next;
+}
 
-/*
-	External variables.
-*/
-uint32_t launch_lidx;
-uint32_t launch_hidx;
-uint32_t launch_signal;
-uint32_t callback_mode = 0;
-uint64_t last_key;
-AtomMetaData_t last_metadata;
+void atom_capture_entry(unsigned entry) { arm_entry(CAPTURE, entry, 0); }
+void atom_probe_entry(void) { arm_entry(PROBE, ATOM_PROBE_ENTRY, 0); }
+void atom_wrap_entry(unsigned slot, uint64_t pc) { arm_entry(WRAP, slot, pc); }
 
-/*
-	Callback function for inserting key and value into hash table.
-	Assigned before any actual kernel is run.
-*/
-static void (*hash_insert_callback)(uint64_t, AtomMetaData_t) = NULL;
-
-void assign_hash_insert(void* addr) {
-	hash_insert_callback = (void (*)(uint64_t, AtomMetaData_t))addr;
+uint64_t atom_finish_entry(void) {
+    if (mode != OBSERVED)
+        abort(1, EINVAL, "Missing CUDA pre-upload callback");
+    mode = IDLE;
+    return observed_pc;
 }
 
 // /*** CUDA Globals Manipulation. CUDA 10.2 only ***/
@@ -521,82 +509,36 @@ abort_cuda:
 /* ************************ Original libsmctrl code until here ************************ */
 
 
-/* 
-	Assigns this callback in every kernel launched.
+/* Only armed launches on this CPU thread may modify a QMD. */
+static void false_launch_callback(void *unused, int domain, int cbid, const void *in_params) {
+    if (mode == IDLE) return;
+    if (mode == OBSERVED || !in_params || *(const uint32_t*)in_params < 0x50)
+        abort(1, EINVAL, "Unexpected CUDA launch callback or layout");
+    char **allocation = ((char** const*)in_params)[8];
+    if (!allocation || !*allocation)
+        abort(1, EINVAL, "Missing CUDA launch descriptor");
 
-	if callback_mode == 0, it's wrapper assign mode.
-	consider any kernel call as wrapper call, then stores PROGRAM_ADDRESS/REGISTER_CNT(_V).
+    char *qmd = *allocation;
+    uint32_t *lower = (uint32_t*)(qmd + 192);
+    uint32_t *upper = (uint32_t*)(qmd + 196);
+    uint8_t *regs = (uint8_t*)(qmd + 123);
+    uint8_t *regs_v = (uint8_t*)(qmd + 81);
+    observed_pc = ((uint64_t)*upper << 32) | *lower;
+    if (!observed_pc)
+        abort(1, EINVAL, "Empty CUDA program address");
 
-    if callback_mode == 1, it's normal kernel launch mode.
-	(1. Add new entry inside gpu's hash table:
-		CONSTANT_BUFFER_ADDR + 0x160 => ((key), PROGRAM_ADDRESS, lidx, hidx))
-	2. PROGRAM_ADDRESS is replaced with PROGRAM_ADDRESS(wrapper).
-	3. if REGISTER_CNT(_V) is smaller than wrapper, it's replaced with wrapper's value.
-*/
-static void false_launch_callback(void *ukwn, int domain, int cbid, const void *in_params) {
-	if (*(uint32_t*)in_params < 0x50) {
-		fprintf(stderr, "Unsupported CUDA version for callback-based SM masking. Aborting...\n");
-		return;
-	}
-	if (!**((uintptr_t***)in_params+8)) {
-		fprintf(stderr, "Called with NULL halLaunchDataAllocation\n");
-		return;
-	}
-
-	// PROGRAM_ADDRESS fields.
-	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
-	uint32_t *upper_ptr = (uint32_t*)(**((char***)in_params + 8) + 196);
-
-	// %gridid was found in this address.
-	uint64_t grid_id = (uint64_t)(*((uint64_t*)in_params + 7) + 0);
-
-	// (*buffer_start) & 0x0001ffffffffffff is actual constant buffer address, since it's 49 bits long.
-	uint64_t *buffer_start = (uint16_t*)(**((char***)in_params + 8) + 128);
-
-	uint8_t *register_cnt_v_ptr = (uint8_t*)(**((char***)in_params + 8) + 81);
-	uint8_t *register_cnt_ptr = (uint8_t*)(**((char***)in_params + 8) + 123);
-	
-	if (callback_mode == 0) {
-		fprintf(stderr, "libsmctrl: callback mode 0\n");
-		wrapper_progaddr_upper = *upper_ptr;
-		wrapper_progaddr_lower = *lower_ptr;
-		wrapper_register_cnt = *register_cnt_ptr;
-		wrapper_register_cnt_v = *register_cnt_v_ptr;
-	}
-	else if(callback_mode == 1) {
-		if(launch_signal == 0) {
-			fprintf(stderr, "[libsmctrl] Warning: Side-path launch aside of scheduler cudaLaunchKernel() detected!\n");
-			return;
-		}
-		launch_signal = 0;
-		// fprintf(stderr, "libsmctrl: callback mode 1\n");
-		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
-		uint64_t buffer_addr = (*buffer_start) & 0x0001ffffffffffff;
-		
-		AtomMetaData_t metadata;
-		// metadata.key = buffer_addr + 0x160;
-		metadata.key = grid_id;
-		metadata.kernel = program_addr;
-		metadata.lidx = launch_lidx;
-		metadata.hidx = launch_hidx;
-		// last_key = buffer_addr + 0x160;
-		last_key = grid_id;
-		last_metadata = metadata;
-		// hash_insert_callback(buffer_addr + 0x160, metadata);
-		// hash_insert_callback(grid_id, metadata);
-		
-		*upper_ptr = wrapper_progaddr_upper;
-		*lower_ptr = wrapper_progaddr_lower;
-
-		if(*register_cnt_ptr < wrapper_register_cnt)
-			*register_cnt_ptr = wrapper_register_cnt;
-		if(*register_cnt_v_ptr < wrapper_register_cnt_v)
-			*register_cnt_v_ptr = wrapper_register_cnt_v;
-	}
-	else {
-		fprintf(stderr, "libsmctrl: Unsupported callback mode\n");
-		exit(1);
-	}
+    struct entry_descriptor *entry = &entries[selected_entry];
+    if (mode == CAPTURE) {
+        *entry = (struct entry_descriptor){*lower, *upper, *regs, *regs_v};
+    } else {
+        if (mode == WRAP && observed_pc != expected_pc)
+            abort(1, EINVAL, "Atom program address changed since probe");
+        *lower = entry->lower;
+        *upper = entry->upper;
+        if (*regs < entry->registers) *regs = entry->registers;
+        if (*regs_v < entry->registers_v) *regs_v = entry->registers_v;
+    }
+    mode = OBSERVED;
 }
 
 static void test_func() {

@@ -40,10 +40,10 @@ TEST_OBJECTS := $(TEST_SOURCES:.cu=.o) testcase/registry.o $(LIBTORCH_OBJECTS)
 
 all: libsmctrl.o libsmctrl.a hooking.so wrapper.o threading
 
-libsmctrl.o:
+libsmctrl.o: libsmctrl.c libsmctrl.h
 	gcc -I/usr/local/cuda-12.8/include libsmctrl.c -c -o libsmctrl.o -fPIC -lcuda -L/usr/local/cuda-12.8/lib64/stubs
 
-libsmctrl.a:
+libsmctrl.a: libsmctrl.o
 	ar rcs libsmctrl.a libsmctrl.o
 
 hooking.so: hooking.cpp hooking.h
@@ -51,7 +51,7 @@ hooking.so: hooking.cpp hooking.h
 
 # -G option is important, this ignores some compiler optimization,
 # which leads to failure of kernel-inside-kernel launch.
-wrapper.o: wrapper.cu wrapper.h
+wrapper.o: wrapper.cu wrapper.h libsmctrl.h
 	nvcc $(ABI_FLAGS) -G -cudart=shared -std=c++11 -arch=sm_70 -c -o wrapper.o wrapper.cu
 
 # Testcases should work for multiple architectures, but that's for later.
@@ -63,7 +63,7 @@ testcase/registry.o: testcase/registry.cpp testcase/testcase.h
 
 testcase/cublaslt_matmul.o testcase/cublaslt_chained.o: testcase/cublaslt_common.cuh
 
-threading: threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o
+threading: threading.cpp wrapper.h libsmctrl.h $(TEST_OBJECTS) wrapper.o libsmctrl.o
 	nvcc $(ABI_FLAGS) $(LIBTORCH_LINK_FLAGS) -G -g -Xcompiler -pthread threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o -o threading -ldl -L/usr/local/cuda-12.8/lib64 -lcudart -lcuda -lcublasLt $(CUDNN_LIBS) $(LIBTORCH_LIBS) -L/usr/local/cuda-12.8/lib64/stubs
 
 clean:

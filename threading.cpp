@@ -79,10 +79,9 @@ cudaStream_t** sched_streams;
 
 
 /*
-	Stream for metadata passing / launch blocking APIs.
+	Stream for uploading atom metadata.
 */
 cudaStream_t metadata_pass_stream;
-cudaStream_t launch_block_stream;
 
 /*
 	Main's initialized CUDA context, shared by scheduler streams and metadata.
@@ -91,21 +90,6 @@ typedef struct scheduler_arg {
 	CUcontext context;
 } scheduler_arg;
 
-
-void hash_insert(uint64_t key, AtomMetaData value) {
-	if(key == 0) {
-		fprintf(stderr, "hash_insert: trying to insert a null key. returning.\n");
-	}
-	/* Problem: This can be INSIDE work_queue_mutex critical section, which will cause deadlock */
-	table_insert(key, value);
-}
-
-void hash_delete(uint64_t key) {
-	if(key == 0) {
-		fprintf(stderr, "hash_delete: trying to delete a null key. returning.\n");
-	}
-	table_delete(key);
-}
 
 // The harness owns startup and completion; workloads contain ordinary CUDA code.
 void* thread_wrapper(void* arg) {
@@ -149,10 +133,6 @@ void register_functions() {
 
 	*(void**)(&actual_cudaMemsetAsync) = dlsym(RTLD_NEXT, "cudaMemsetAsync");
     assert(actual_cudaMemsetAsync != nullptr);
-
-    // assign hash_insert_callback of libsmctrl.
-	assign_hash_insert((void*)hash_insert);
-
 }
 
 void variables_setup() {
@@ -212,25 +192,19 @@ void create_streams() {
 		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp - 1);
 
  
-	cudaStreamCreateWithPriority(&metadata_pass_stream, cudaStreamNonBlocking, *hp);
-	cudaStreamCreateWithPriority(&launch_block_stream, cudaStreamNonBlocking, *hp);
+	if (cudaStreamCreateWithPriority(&metadata_pass_stream, cudaStreamNonBlocking, *hp) != cudaSuccess) {
+		fprintf(stderr, "Cannot create metadata stream\n");
+		std::exit(EXIT_FAILURE);
+	}
 
 	free(lp);
 	free(hp);
 
 }
 
-/*
-	call initial_wrapper_run() and initial_nothing_run() to assign
-	wrapper256() (and more later!), do_nothing to variables at libsmctrl.c.
-
-	+ call assign_hash_insert() to assign hash insert function to libsmctrl.
-*/
 void assign_launch() {
 	libsmctrl_false_launch_callback();
-	callback_mode = 0;
 	initial_wrapper_run();
-	callback_mode = 1;
 	*no_hook_thr = false;
 }
 
@@ -268,6 +242,8 @@ void* scheduler(void* scarg) {
         (CUresult (CUDAAPI *)(void*))memory_dlsym(memory_handle, "cuMemFreeHost");
     assert(actual_cuMemFreeHost != NULL);
 
+	CUfunction batch_function[THREAD_NUM] = {};
+	uint64_t batch_pc[THREAD_NUM] = {};
 	int turn = 0;
     pthread_mutex_lock(&start_mutex);
     ready = true;
@@ -276,25 +252,6 @@ void* scheduler(void* scarg) {
     fprintf(stderr, "scheduler init...\n");
 
     while (true) {
-		// reap every possible event in the release queue, and call hash_delete.
-		bool release_queue_empty = true;
-		for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
-			if(release_queue[i].key != 0) {
-				if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
-					if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
-					cudaEventDestroy(release_queue[i].event);
-					cuMemFree(release_queue[i].launchblock);
-					release_queue[i].key = 0;
-            		release_queue[i].event = 0;
-            		release_queue[i].reaped = false;
-					
-				}
-				release_queue_empty = false;
-			}
-			
-		}
-
-
         // Clients synchronize before returning. Once every producer has finished,
         // drain all records before stopping. Use an external timeout for hangs.
         if (clients_done.load() == THREAD_NUM) {
@@ -304,7 +261,10 @@ void* scheduler(void* scarg) {
                 empty &= work_queue[i]->empty();
                 pthread_mutex_unlock(work_queue_mutex[i]);
             }
-            if (empty) return nullptr;
+            if (empty) {
+                shutdown_metadata();
+                return nullptr;
+            }
         }
 		// pop one from queue, and assign.
 		pthread_mutex_lock(work_queue_mutex[turn]);
@@ -348,32 +308,30 @@ void* scheduler(void* scarg) {
 
 				case RECORD_CULAUNCHKERNEL: {
 					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
-					// fprintf(stderr, "scheduler found pending job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
-					// TODO: how to pass status?
-					launch_lidx = record.lidx;
-					launch_hidx = record.hidx;
-					launch_signal = 1;
-
-					cudaEvent_t launch_finish_event;
-					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
-
-					CUdeviceptr launch_block_memory = 0;
-					cuMemAlloc(&launch_block_memory, sizeof(uint32_t));
-    				cuMemsetD32Async(launch_block_memory, 0, 1, (CUstream)launch_block_stream);
-					cuStreamSynchronize(launch_block_stream);
-				
-					cuStreamWaitValue32((CUstream)*sched_streams[turn], launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
-
-					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
-
-					hash_insert(last_key, last_metadata);
-
-					cuStreamWriteValue32((CUstream)launch_block_stream, launch_block_memory, 1, 0);
-					
-					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
-					release_queue_insert(last_key, launch_finish_event, launch_block_memory);
-					// fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
-
+					int slot = acquire_atom_slot();
+					if (slot < 0) {
+						// Keep this record at the head while other clients can progress.
+						turn = (turn + 1) % THREAD_NUM;
+						continue;
+					}
+					CUstream stream = *sched_streams[turn];
+					auto launch = [&]() {
+						return actual_cuLaunchKernel(record.f, record.gridDimX, record.gridDimY,
+							record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ,
+							record.sharedMemBytes, stream, record.kernelParams, record.extra);
+					};
+					// Resolve the target before uploading the first atom of this client launch.
+					if (record.lidx == 0 || batch_function[turn] != record.f) {
+						atom_probe_entry();
+						check_atom_driver(launch(), "probe original kernel");
+						batch_pc[turn] = atom_finish_entry();
+						batch_function[turn] = record.f;
+					}
+					prepare_atom_slot(slot, batch_pc[turn], record.lidx, record.hidx, stream);
+					atom_wrap_entry(slot, batch_pc[turn]);
+					check_atom_driver(launch(), "launch atom");
+					atom_finish_entry();
+					finish_atom_slot(slot, stream);
 				}
 				break;
 
@@ -469,7 +427,7 @@ int main(int argc, char** argv) {
 	
 	printf("create_streams done.\n");
 
-	// Kernel Launch of wrapper and idle kernel, to assign wrapper kernel and idle kernel.
+	// Capture the program descriptors for the slot wrappers and the probe.
 	// These launches should not be hooked.
 	assign_launch();
 
