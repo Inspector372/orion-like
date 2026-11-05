@@ -255,15 +255,3 @@ Python frontend support
 
 CudaGraph hook implementation(parallel)
 
-
-## Deadlocks Happening
-
-Freezing of cuMemcpyAsync() in libtorch testcases
-
-cuLaunchKernel vs. cudaLaunchKernel
-
-Any API vs. cuLibraryGetModule
-
-cuLaunchKernel vs. cuLibraryUnload
-
-cuLaunchKernel vs. cuMemFree_v2
