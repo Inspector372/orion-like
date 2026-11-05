@@ -61,7 +61,7 @@ pthread_t* thread_ids;
     Each time the client creates a stream, a work queue is newly created.
     Non-stream operations go to the default queue.
 */
-queue<queue_record>** work_queue;
+client_streams* work_queue;
 pthread_mutex_t** work_queue_mutex;
 
 
@@ -81,14 +81,17 @@ CUresult (*real_cuLaunchCooperativeKernel)(CUfunction, unsigned int, unsigned in
 /*
 	Main cuda address resolving API.
 */
-typedef CUresult (*cuGetProcAddress_t)(const char*, void**, int, unsigned int, void*);
-cuGetProcAddress_t real_cuGetProcAddress = NULL;
-cuGetProcAddress_t real_cuGetProcAddress_v2 = NULL;
+typedef CUresult (CUDAAPI *cuGetProcAddress_t)(const char*, void**, int, cuuint64_t);
+typedef CUresult (CUDAAPI *cuGetProcAddress_v2_t)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*);
 
 /*
 	Real instance of dlsym().
 */
-void* (*real_dlsym)(void*, const char*) = NULL;
+static void* real_dlsym(void* handle, const char* symbol) {
+    static void* (*loader)(void*, const char*) =
+        (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
+    return loader ? loader(handle, symbol) : NULL;
+}
 void* cu_handle = NULL;
 
 
@@ -98,32 +101,58 @@ void* cu_handle = NULL;
 bool cudaLaunchKernel_launched[THREAD_NUM];
 
 
-int get_idx() {
-	assert(thread_ids != NULL);
-	pthread_t tid = pthread_self();
-	// fprintf(stderr, "tid = %ld\n", tid);
-	// pid_t tid = syscall(SYS_gettid);
-	int idx = -1;
-	for (int i = 0; i < THREAD_NUM; i++) {
-		if (pthread_equal(tid, thread_ids[i])) {
-			idx = i;
-			break;
-		}
-	}
-	assert(idx != -1);
-	// fprintf(stderr, "idx = %d\n", idx);
-	return idx;
+// Slot zero always represents this client's default stream. Explicit streams
+// can also be shared by clients; route them to the creator's FIFO.
+static stream_queue_ptr find_stream(int client, CUstream stream) {
+    bool use_default = !stream || stream == CU_STREAM_LEGACY || stream == CU_STREAM_PER_THREAD;
+    for (int n = 0; n < THREAD_NUM; ++n) {
+        int owner = (client + n) % THREAD_NUM;
+        pthread_mutex_lock(work_queue_mutex[owner]);
+        stream_queue_ptr found;
+        if (use_default) found = work_queue[client].front();
+        else for (const stream_queue_ptr& queue : work_queue[owner]) {
+            if (queue->gpu == stream) { found = queue; break; }
+        }
+        pthread_mutex_unlock(work_queue_mutex[owner]);
+        if (found || use_default) return found;
+    }
+    // Existing streams may come from CUDA libraries or initialization before
+    // client registration. Use the client control FIFO, retaining the GPU handle.
+    pthread_mutex_lock(work_queue_mutex[client]);
+    stream_queue_ptr fallback = work_queue[client].front();
+    pthread_mutex_unlock(work_queue_mutex[client]);
+    return fallback;
 }
 
-void block(int idx, pthread_mutex_t** mutexes, queue<queue_record>** kqueues) {
-	while (1) {
-		pthread_mutex_lock(mutexes[idx]);
-		volatile int sz = kqueues[idx]->size();
-		pthread_mutex_unlock(mutexes[idx]);
-		if (sz==0)
-			break;
-	}
+static uint64_t submit(const stream_queue_ptr& queue, queue_record record) {
+    pthread_mutex_t* lock = work_queue_mutex[queue->owner];
+    pthread_mutex_lock(lock);
+    uint64_t ticket = 0;
+    if (!queue->closing) {
+        queue->records.push(record);
+        ticket = ++queue->issued;
+        if (record.type == RECORD_STREAM_DESTROY && queue != work_queue[queue->owner].front())
+            queue->closing = true;
+    }
+    pthread_mutex_unlock(lock);
+    return ticket;
 }
+
+static void wait_for_submission(const stream_queue_ptr& queue, uint64_t ticket) {
+    while (queue->retired.load(std::memory_order_acquire) < ticket) sched_yield();
+}
+
+static CUresult submit_request(const stream_queue_ptr& queue, record_type type,
+                               driver_request& request) {
+    record_data data;
+    data.request = &request;
+    if (!submit(queue, {type, data})) return CUDA_ERROR_INVALID_HANDLE;
+    while (!request.done.load(std::memory_order_acquire)) sched_yield();
+    return request.status;
+}
+
+struct launch_ticket { stream_queue_ptr queue; uint64_t number; };
+static thread_local std::vector<launch_ticket> runtime_submissions;
 
 /*
 	** intercept part **
@@ -155,13 +184,171 @@ static void* memory_driver_symbol(const char* symbol) {
 
 static int memory_client_idx() {
     // Startup, scheduler and unregistered threads must not self-enqueue.
-    if (no_hook || !thread_ids || !work_queue || !work_queue_mutex) return -1;
+    if (__atomic_load_n(&no_hook, __ATOMIC_ACQUIRE) || !thread_ids || !work_queue || !work_queue_mutex) return -1;
     for (int i = 0; i < THREAD_NUM; ++i)
         if (pthread_equal(pthread_self(), thread_ids[i])) return i;
     return -1;
 }
 
 extern "C" {
+
+CUresult CUDAAPI cuStreamCreate(CUstream* phStream, unsigned int flags) {
+    static CUresult (CUDAAPI *real)(CUstream*, unsigned int) =
+        (CUresult (CUDAAPI *)(CUstream*, unsigned int))memory_driver_symbol("cuStreamCreate");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(phStream, flags);
+    driver_request request;
+    request.stream_out = phStream;
+    request.flags = flags;
+    return submit_request(find_stream(idx, NULL), RECORD_STREAM_CREATE, request);
+}
+
+CUresult CUDAAPI cuStreamCreateWithPriority(CUstream* phStream, unsigned int flags, int priority) {
+    static CUresult (CUDAAPI *real)(CUstream*, unsigned int, int) =
+        (CUresult (CUDAAPI *)(CUstream*, unsigned int, int))memory_driver_symbol("cuStreamCreateWithPriority");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(phStream, flags, priority);
+    driver_request request;
+    request.stream_out = phStream;
+    request.flags = flags;
+    return submit_request(find_stream(idx, NULL), RECORD_STREAM_CREATE, request);
+}
+
+CUresult CUDAAPI cuStreamDestroy_v2(CUstream stream) {
+    static CUresult (CUDAAPI *real)(CUstream) =
+        (CUresult (CUDAAPI *)(CUstream))memory_driver_symbol("cuStreamDestroy_v2");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(stream);
+    if (!stream || stream == CU_STREAM_LEGACY || stream == CU_STREAM_PER_THREAD)
+        return CUDA_ERROR_INVALID_HANDLE;
+    driver_request request;
+    request.destroy_stream = real;
+    request.stream = stream;
+    return submit_request(find_stream(idx, stream), RECORD_STREAM_DESTROY, request);
+}
+
+CUresult CUDAAPI cuStreamSynchronize(CUstream stream) {
+    static CUresult (CUDAAPI *real)(CUstream) =
+        (CUresult (CUDAAPI *)(CUstream))memory_driver_symbol("cuStreamSynchronize");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(stream);
+    driver_request request;
+    request.stream = stream;
+    return submit_request(find_stream(idx, stream), RECORD_STREAM_SYNC, request);
+}
+
+CUresult CUDAAPI cuEventCreate(CUevent* phEvent, unsigned int flags) {
+    static CUresult (CUDAAPI *real)(CUevent*, unsigned int) =
+        (CUresult (CUDAAPI *)(CUevent*, unsigned int))memory_driver_symbol("cuEventCreate");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(phEvent, flags);
+    driver_request request;
+    request.event_out = phEvent;
+    request.flags = flags;
+    return submit_request(find_stream(idx, NULL), RECORD_EVENT_CREATE, request);
+}
+
+CUresult CUDAAPI cuEventDestroy_v2(CUevent event) {
+    static CUresult (CUDAAPI *real)(CUevent) =
+        (CUresult (CUDAAPI *)(CUevent))memory_driver_symbol("cuEventDestroy_v2");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(event);
+    driver_request request;
+    request.event = event;
+    request.destroy_event = real;
+    return submit_request(find_stream(idx, NULL), RECORD_EVENT_DESTROY, request);
+}
+
+CUresult CUDAAPI cuEventQuery(CUevent event) {
+    static CUresult (CUDAAPI *real)(CUevent) =
+        (CUresult (CUDAAPI *)(CUevent))memory_driver_symbol("cuEventQuery");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(event);
+    driver_request request;
+    request.event = event;
+    return submit_request(find_stream(idx, NULL), RECORD_EVENT_QUERY, request);
+}
+
+CUresult CUDAAPI cuEventRecord(CUevent event, CUstream stream) {
+    static CUresult (CUDAAPI *real)(CUevent, CUstream) =
+        (CUresult (CUDAAPI *)(CUevent, CUstream))memory_driver_symbol("cuEventRecord");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(event, stream);
+    driver_request request;
+    request.event = event;
+    request.stream = stream;
+    return submit_request(find_stream(idx, stream), RECORD_EVENT_RECORD, request);
+}
+
+CUresult CUDAAPI cuEventSynchronize(CUevent event) {
+    static CUresult (CUDAAPI *real)(CUevent) =
+        (CUresult (CUDAAPI *)(CUevent))memory_driver_symbol("cuEventSynchronize");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(event);
+    driver_request request;
+    request.event = event;
+    return submit_request(find_stream(idx, NULL), RECORD_EVENT_SYNC, request);
+}
+
+CUresult CUDAAPI legacy_cuStreamDestroy(CUstream stream) asm("cuStreamDestroy");
+CUresult CUDAAPI legacy_cuStreamDestroy(CUstream stream) {
+    static CUresult (CUDAAPI *real)(CUstream) =
+        (CUresult (CUDAAPI *)(CUstream))memory_driver_symbol("cuStreamDestroy");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(stream);
+    if (!stream || stream == CU_STREAM_LEGACY || stream == CU_STREAM_PER_THREAD)
+        return CUDA_ERROR_INVALID_HANDLE;
+    driver_request request;
+    request.destroy_stream = real;
+    request.stream = stream;
+    return submit_request(find_stream(idx, stream), RECORD_STREAM_DESTROY, request);
+}
+
+CUresult CUDAAPI cuStreamSynchronize_ptsz(CUstream stream) {
+    static CUresult (CUDAAPI *real)(CUstream) =
+        (CUresult (CUDAAPI *)(CUstream))memory_driver_symbol("cuStreamSynchronize_ptsz");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(stream);
+    driver_request request;
+    request.stream = stream;
+    return submit_request(find_stream(idx, stream), RECORD_STREAM_SYNC, request);
+}
+
+CUresult CUDAAPI legacy_cuEventDestroy(CUevent event) asm("cuEventDestroy");
+CUresult CUDAAPI legacy_cuEventDestroy(CUevent event) {
+    static CUresult (CUDAAPI *real)(CUevent) =
+        (CUresult (CUDAAPI *)(CUevent))memory_driver_symbol("cuEventDestroy");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(event);
+    driver_request request;
+    request.event = event;
+    request.destroy_event = real;
+    return submit_request(find_stream(idx, NULL), RECORD_EVENT_DESTROY, request);
+}
+
+CUresult CUDAAPI cuEventRecord_ptsz(CUevent event, CUstream stream) {
+    static CUresult (CUDAAPI *real)(CUevent, CUstream) =
+        (CUresult (CUDAAPI *)(CUevent, CUstream))memory_driver_symbol("cuEventRecord_ptsz");
+    if (!real) return CUDA_ERROR_NOT_SUPPORTED;
+    int idx = memory_client_idx();
+    if (idx < 0) return real(event, stream);
+    driver_request request;
+    request.event = event;
+    request.stream = stream;
+    return submit_request(find_stream(idx, stream), RECORD_EVENT_RECORD, request);
+}
 
 CUresult CUDAAPI cuMemAlloc(CUdeviceptr* dptr, size_t bytesize) {
     static CUresult (CUDAAPI *real_cuMemAlloc)(CUdeviceptr*, size_t) =
@@ -176,11 +363,8 @@ CUresult CUDAAPI cuMemAlloc(CUdeviceptr* dptr, size_t bytesize) {
     new_record_data.r_cuMemAlloc = new_record;
     queue_record new_qrecord = {RECORD_CUMEMALLOC, new_record_data};
 
-    pthread_mutex_lock(work_queue_mutex[idx]);
-    work_queue[idx]->push(new_qrecord);
-    pthread_mutex_unlock(work_queue_mutex[idx]);
-
-    block(idx, work_queue_mutex, work_queue);
+    stream_queue_ptr queue = find_stream(idx, NULL);
+    wait_for_submission(queue, submit(queue, new_qrecord));
     return status;
 }
 
@@ -198,11 +382,8 @@ CUresult CUDAAPI cuMemAllocHost(void** pp, size_t bytesize) {
     new_record_data.r_cuMemAllocHost = new_record;
     queue_record new_qrecord = {RECORD_CUMEMALLOCHOST, new_record_data};
 
-    pthread_mutex_lock(work_queue_mutex[idx]);
-    work_queue[idx]->push(new_qrecord);
-    pthread_mutex_unlock(work_queue_mutex[idx]);
-
-    block(idx, work_queue_mutex, work_queue);
+    stream_queue_ptr queue = find_stream(idx, NULL);
+    wait_for_submission(queue, submit(queue, new_qrecord));
     return status;
 }
 
@@ -220,11 +401,8 @@ CUresult CUDAAPI cuMemHostAlloc(void** pp, size_t bytesize, unsigned int flags) 
     new_record_data.r_cuMemHostAlloc = new_record;
     queue_record new_qrecord = {RECORD_CUMEMHOSTALLOC, new_record_data};
 
-    pthread_mutex_lock(work_queue_mutex[idx]);
-    work_queue[idx]->push(new_qrecord);
-    pthread_mutex_unlock(work_queue_mutex[idx]);
-
-    block(idx, work_queue_mutex, work_queue);
+    stream_queue_ptr queue = find_stream(idx, NULL);
+    wait_for_submission(queue, submit(queue, new_qrecord));
     return status;
 }
 
@@ -242,11 +420,8 @@ CUresult CUDAAPI cuMemFree(CUdeviceptr dptr) {
     new_record_data.r_cuMemFree = new_record;
     queue_record new_qrecord = {RECORD_CUMEMFREE, new_record_data};
 
-    pthread_mutex_lock(work_queue_mutex[idx]);
-    work_queue[idx]->push(new_qrecord);
-    pthread_mutex_unlock(work_queue_mutex[idx]);
-
-    block(idx, work_queue_mutex, work_queue);
+    stream_queue_ptr queue = find_stream(idx, NULL);
+    wait_for_submission(queue, submit(queue, new_qrecord));
     return status;
 }
 
@@ -264,42 +439,23 @@ CUresult CUDAAPI cuMemFreeHost(void* p) {
     new_record_data.r_cuMemFreeHost = new_record;
     queue_record new_qrecord = {RECORD_CUMEMFREEHOST, new_record_data};
 
-    pthread_mutex_lock(work_queue_mutex[idx]);
-    work_queue[idx]->push(new_qrecord);
-    pthread_mutex_unlock(work_queue_mutex[idx]);
-
-    block(idx, work_queue_mutex, work_queue);
+    stream_queue_ptr queue = find_stream(idx, NULL);
+    wait_for_submission(queue, submit(queue, new_qrecord));
     return status;
 }
 
 
-/*
-	*exact* behavior of cudaDeviceSynchronize() need to be inspected.
-
-	For now, it creates a cudaevent, attaches in work_queue.
-	and wait until it gets scheduled and eventually finished.
-*/
 cudaError_t cudaDeviceSynchronize(void) {
-	
-	cudaEvent_t event;
-	cudaEventCreate(&event);
-	int idx = get_idx();
-
-	record_cudaEvent new_record;
-	new_record = {event};
-	union record_data new_record_data;
-	new_record_data.r_cudaEvent = new_record;
-	queue_record new_qrecord = {RECORD_CUDAEVENT, new_record_data};
-
-	pthread_mutex_lock(work_queue_mutex[idx]);
-	work_queue[idx]->push(new_qrecord);
-	pthread_mutex_unlock(work_queue_mutex[idx]);
-	
-	block(idx, work_queue_mutex, work_queue);
-	cudaEventSynchronize(event);
-
-	cudaEventDestroy(event);
-	return cudaSuccess;
+    int idx = memory_client_idx();
+    if (idx < 0) {
+        void* (*loader)(void*, const char*) =
+            (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
+        static cudaError_t (*real_sync)(void) =
+            (cudaError_t (*)(void))loader(RTLD_NEXT, "cudaDeviceSynchronize");
+        return real_sync ? real_sync() : cudaErrorInitializationError;
+    }
+    driver_request request;
+    return (cudaError_t)submit_request(find_stream(idx, NULL), RECORD_DEVICE_SYNC, request);
 }
 
 /*
@@ -316,16 +472,17 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
             fprintf(stderr, "FATAL ERROR: real_cudaLaunchKernel == NULL\n");
         }
     }
-	if(no_hook) {
+	int idx = memory_client_idx();
+	if(idx < 0) {
 		return real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
 	}
-	int idx = get_idx();
 	// fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
 	cudaLaunchKernel_launched[idx] = true;
 	cudaError_t err = real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
 	cudaLaunchKernel_launched[idx] = false;
 	// fprintf(stderr, "[cudaHook] block-start from %d!\n", idx);
-	block(idx, work_queue_mutex, work_queue);
+	for (const launch_ticket& t : runtime_submissions) wait_for_submission(t.queue, t.number);
+	runtime_submissions.clear();
 	// fprintf(stderr, "[cudaHook] block-end from %d!\n", idx);
 	
 	return err;
@@ -345,13 +502,13 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
         }
     }
 
-	if(no_hook) {
+	int idx = memory_client_idx();
+	if(idx < 0) {
 		// immediately run the kernel.
 		fprintf(stderr, "[cuHook] no-hook launch of %p\n", f);
 		return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
 	}
 
-	int idx = get_idx();
 	fprintf(stderr, "[cuHook] caught call from %d!\n", idx);
 
 	// inspect kernel size and setup atomization info.
@@ -372,28 +529,29 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	assert(work_queue_mutex != NULL);
 	assert(work_queue != NULL);
 
-	new_record = {f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra, 0, atom_size};
+	new_record = {f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra, 0, (uint32_t)atom_size};
 	union record_data new_record_data;
 	new_record_data.r_cuLaunchKernel = new_record;
 	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
 
-	pthread_mutex_lock(work_queue_mutex[idx]);
+    stream_queue_ptr queue = find_stream(idx, hStream);
+    pthread_mutex_t* lock = work_queue_mutex[queue->owner];
+    pthread_mutex_lock(lock);
+    if (queue->closing) {
+        pthread_mutex_unlock(lock);
+        return CUDA_ERROR_INVALID_HANDLE;
+    }
+    for (int i = 0; i < atom_num; ++i) {
+        queue->records.push(new_qrecord);
+        ++queue->issued;
+        new_qrecord.data.r_cuLaunchKernel.lidx += atom_size;
+        new_qrecord.data.r_cuLaunchKernel.hidx += atom_size;
+    }
+    uint64_t ticket = queue->issued;
+    pthread_mutex_unlock(lock);
 
-	// Atomization.
-	for(int i=0; i<atom_num; i++) {
-		work_queue[idx]->push(new_qrecord);
-		new_qrecord.data.r_cuLaunchKernel.lidx += atom_size;
-		new_qrecord.data.r_cuLaunchKernel.hidx += atom_size;
-	}
-	
-
-	pthread_mutex_unlock(work_queue_mutex[idx]);
-	
-	if(!cudaLaunchKernel_launched[idx]) {
-		fprintf(stderr, "[cuHook] block-start from %d!\n", idx);
-		block(idx, work_queue_mutex, work_queue);
-		fprintf(stderr, "[cuHook] block-end from %d!\n", idx);
-	}
+    if (cudaLaunchKernel_launched[idx]) runtime_submissions.push_back({queue, ticket});
+    else wait_for_submission(queue, ticket);
 
     return err;
 
@@ -419,6 +577,9 @@ CUresult cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** ker
 CUresult cuLaunchKernel_ptsz(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
                         unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
+    if (memory_client_idx() >= 0)
+        return cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ,
+                              sharedMemBytes, hStream, kernelParams, extra);
 	fprintf(stderr, "Warning: (non-implemented) cuLaunchKernel_ptsz is captured!\n");
 	if (real_cuLaunchKernel_ptsz == NULL) {
         if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
@@ -499,27 +660,28 @@ cudaError_t cudaMemset(void* devPtr, int value, size_t count) {
             fprintf(stderr, "FATAL ERROR: real_cudaMemset == NULL\n");
         }
     }
-	int idx = get_idx();
+	int idx = memory_client_idx();
+	if (idx < 0) return real_cudaMemset(devPtr, value, count);
 	fprintf(stderr, "[cudaMemsetHook] hooked from %d!\n", idx);
 
 	assert(work_queue_mutex != NULL);
 	assert(work_queue != NULL);
 
 	record_cudaMemset new_record;
-	new_record = {devPtr, value, count};
+	cudaError_t status = cudaSuccess;
+	new_record = {devPtr, value, count, &status};
 	union record_data new_record_data;
 	new_record_data.r_cudaMemset = new_record;
 	queue_record new_qrecord = {RECORD_CUDAMEMSET, new_record_data};
 
-	pthread_mutex_lock(work_queue_mutex[idx]);
-	work_queue[idx]->push(new_qrecord);
-	pthread_mutex_unlock(work_queue_mutex[idx]);
-	
-	fprintf(stderr, "[cudaMemsetHook] blocking from %d!\n", idx);
-	block(idx, work_queue_mutex, work_queue);
-	fprintf(stderr, "[cudaMemsetHook] unblocking from %d!\n", idx);
-
-	return cudaSuccess;
+    stream_queue_ptr queue = find_stream(idx, NULL);
+    if (!queue) return cudaErrorInvalidResourceHandle;
+    uint64_t ticket = submit(queue, new_qrecord);
+    if (!ticket) return cudaErrorInvalidResourceHandle;
+    wait_for_submission(queue, ticket);
+    if (status != cudaSuccess) return status;
+    driver_request checkpoint;
+    return (cudaError_t)submit_request(queue, RECORD_STREAM_SYNC, checkpoint);
 
 }
 
@@ -530,26 +692,26 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t 
             fprintf(stderr, "FATAL ERROR: real_cudaMemsetAsync == NULL\n");
         }
     }
-	int idx = get_idx();
+	int idx = memory_client_idx();
+	if (idx < 0) return real_cudaMemsetAsync(devPtr, value, count, stream);
 	fprintf(stderr, "[cudaMemsetAsyncHook] hooked from %d!\n", idx);
 
 	assert(work_queue_mutex != NULL);
 	assert(work_queue != NULL);
 
 	record_cudaMemsetAsync new_record;
-	new_record = {devPtr, value, count, stream};
+	cudaError_t status = cudaSuccess;
+	new_record = {devPtr, value, count, stream, &status};
 	union record_data new_record_data;
 	new_record_data.r_cudaMemsetAsync = new_record;
 	queue_record new_qrecord = {RECORD_CUDAMEMSETASYNC, new_record_data};
 
-	pthread_mutex_lock(work_queue_mutex[idx]);
-	work_queue[idx]->push(new_qrecord);
-	pthread_mutex_unlock(work_queue_mutex[idx]);
-	
-	// Async is not blocking 'at user level', so no block here.
-	// but it's certainly blocking 'at OS level'.
-
-	return cudaSuccess;
+    stream_queue_ptr queue = find_stream(idx, stream);
+    if (!queue) return cudaErrorInvalidResourceHandle;
+    uint64_t ticket = submit(queue, new_qrecord);
+    if (!ticket) return cudaErrorInvalidResourceHandle;
+    wait_for_submission(queue, ticket);
+	return status;
 }
 
 /*
@@ -558,7 +720,38 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t 
 	but this is where the hook actaully proceed.
 */
 
-CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
+struct intercepted_symbol {
+    const char* base;
+    const char* exported;
+    void* hook;
+};
+
+static const intercepted_symbol stream_event_symbols[] = {
+    {"cuStreamCreate", "cuStreamCreate", (void*)cuStreamCreate},
+    {"cuStreamCreateWithPriority", "cuStreamCreateWithPriority", (void*)cuStreamCreateWithPriority},
+    {"cuStreamDestroy", "cuStreamDestroy_v2", (void*)cuStreamDestroy_v2},
+    {"cuStreamSynchronize", "cuStreamSynchronize", (void*)cuStreamSynchronize},
+    {"cuEventCreate", "cuEventCreate", (void*)cuEventCreate},
+    {"cuEventDestroy", "cuEventDestroy_v2", (void*)cuEventDestroy_v2},
+    {"cuEventQuery", "cuEventQuery", (void*)cuEventQuery},
+    {"cuEventRecord", "cuEventRecord", (void*)cuEventRecord},
+    {"cuEventSynchronize", "cuEventSynchronize", (void*)cuEventSynchronize},
+    {"cuStreamDestroy", "cuStreamDestroy", (void*)legacy_cuStreamDestroy},
+    {"cuStreamSynchronize", "cuStreamSynchronize_ptsz", (void*)cuStreamSynchronize_ptsz},
+    {"cuEventDestroy", "cuEventDestroy", (void*)legacy_cuEventDestroy},
+    {"cuEventRecord", "cuEventRecord_ptsz", (void*)cuEventRecord_ptsz},
+};
+
+static void* stream_event_address(const char* name, void* address) {
+    if (!address || !name) return address;
+    for (const intercepted_symbol& entry : stream_event_symbols) {
+        if ((strcmp(name, entry.base) == 0 || strcmp(name, entry.exported) == 0) &&
+            address == memory_driver_symbol(entry.exported)) return entry.hook;
+    }
+    return address;
+}
+
+CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, cuuint64_t flags) {
 
     if (symbol && (strcmp(symbol, "cuMemAlloc") == 0 || strcmp(symbol, "cuMemAlloc_v2") == 0)) {
         // Let the driver validate the lookup and select its ABI first.
@@ -646,13 +839,13 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
 
 	if (symbol && strcmp(symbol, "cuLaunchKernel_ptsz") == 0) {
         fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel_ptsz pointer assignment!\n");
-        *pfn = (void*)cuGraphLaunch;
+        *pfn = (void*)cuLaunchKernel_ptsz;
         return CUDA_SUCCESS;
     }
 
 	if (symbol && strcmp(symbol, "cuLaunchKernelEx_ptsz") == 0) {
         fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernelEx_ptsz pointer assignment!\n");
-        *pfn = (void*)cuGraphLaunch;
+        *pfn = (void*)cuLaunchKernelEx_ptsz;
         return CUDA_SUCCESS;
     }
 
@@ -662,18 +855,15 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
         return CUDA_SUCCESS;
     }
 
-    // Call the real cuGetProcAddress if it's anything else
-    if (real_cuGetProcAddress == NULL) {
-        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
-        real_cuGetProcAddress = (cuGetProcAddress_t)dlvsym(RTLD_NEXT, "cuGetProcAddress", "RTLD_NEXT"); 
-        if(!real_cuGetProcAddress) {
-             real_cuGetProcAddress = (cuGetProcAddress_t)real_dlsym(cu_handle, "cuGetProcAddress");
-        }
-    }
-    return real_cuGetProcAddress(symbol, pfn, cudaVersion, flags, symbolStatus);
+    static cuGetProcAddress_t resolve =
+        (cuGetProcAddress_t)memory_driver_symbol("cuGetProcAddress");
+    if (!resolve) return CUDA_ERROR_NOT_INITIALIZED;
+    CUresult status = resolve(symbol, pfn, cudaVersion, flags);
+    if (status == CUDA_SUCCESS && pfn) *pfn = stream_event_address(symbol, *pfn);
+    return status;
 }
 
-CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
+CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, cuuint64_t flags, CUdriverProcAddressQueryResult* symbolStatus) {
 
     if (symbol && (strcmp(symbol, "cuMemAlloc") == 0 || strcmp(symbol, "cuMemAlloc_v2") == 0)) {
         // Let the driver validate the lookup and select its ABI first.
@@ -747,42 +937,31 @@ CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion,
         return CUDA_SUCCESS;
     }
 
-    if (symbol && strcmp(symbol, "cuGetProcAddress") == 0) {
-        fprintf(stderr, "[HOOK v2] Hijacking cuGetProcAddress pointer assignment!\n");
-        *pfn = (void*)my_cuGetProcAddress;
-        return CUDA_SUCCESS;
+    static cuGetProcAddress_v2_t resolve =
+        (cuGetProcAddress_v2_t)memory_driver_symbol("cuGetProcAddress_v2");
+    if (!resolve) return CUDA_ERROR_NOT_INITIALIZED;
+    CUresult status = resolve(symbol, pfn, cudaVersion, flags, symbolStatus);
+    if (status == CUDA_SUCCESS && pfn && *pfn && symbol && strcmp(symbol, "cuGetProcAddress") == 0) {
+        if (*pfn == memory_driver_symbol("cuGetProcAddress")) *pfn = (void*)my_cuGetProcAddress;
+        else if (*pfn == memory_driver_symbol("cuGetProcAddress_v2")) *pfn = (void*)my_cuGetProcAddress_v2;
+        return status;
     }
+    if (status == CUDA_SUCCESS && pfn) *pfn = stream_event_address(symbol, *pfn);
+    return status;
+}
 
-    // Call the real cuGetProcAddress if it's anything else
-    if (real_cuGetProcAddress_v2 == NULL) {
-        if(cu_handle == NULL) {
-            cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
-            if(cu_handle == NULL) {
-                // fprintf(stderr, "[HOOK v2] WARNING: cu_handle == NULL\n");
-            }
-        }
-        real_cuGetProcAddress_v2 = (cuGetProcAddress_t)dlvsym(RTLD_NEXT, "cuGetProcAddress_v2", "RTLD_NEXT"); 
-        if(!real_cuGetProcAddress_v2) {
-             real_cuGetProcAddress_v2 = (cuGetProcAddress_t)real_dlsym(cu_handle, "cuGetProcAddress_v2");
-        }
-        if(real_cuGetProcAddress_v2 == NULL) {
-            // fprintf(stderr, "[HOOK v2] WARNING: real_cuGetProcAddress_v2 == NULL\n");
-        }
-    }
-    return real_cuGetProcAddress_v2(symbol, pfn, cudaVersion, flags, symbolStatus);
+// The same wrappers serve ELF-linked callers and explicit driver lookups.
+CUresult CUDAAPI linked_get_proc(const char*, void**, int, cuuint64_t) asm("cuGetProcAddress");
+CUresult CUDAAPI linked_get_proc(const char* name, void** address, int version, cuuint64_t flags) {
+    return my_cuGetProcAddress(name, address, version, flags);
+}
+CUresult CUDAAPI cuGetProcAddress_v2(const char* name, void** address, int version, cuuint64_t flags,
+                                    CUdriverProcAddressQueryResult* query) {
+    return my_cuGetProcAddress_v2(name, address, version, flags, query);
 }
 
 void* dlsym(void* handle, const char* symbol) {
     // fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s.\n", symbol);
-    // Bootstrap the real dlsym using dlvsym to avoid recursion
-    if (real_dlsym == NULL) {
-        real_dlsym = (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
-        if (real_dlsym == NULL) {
-            real_dlsym = (void* (*)(void*, const char*))dlopen("libdl.so.2", RTLD_NOW); 
-        }
-    }
-
-
     if (symbol && strcmp(symbol, "cuMemAlloc_v2") == 0) {
         void* resolved = real_dlsym(handle, symbol);
         if (resolved && resolved == memory_driver_symbol("cuMemAlloc_v2"))
@@ -822,8 +1001,6 @@ void* dlsym(void* handle, const char* symbol) {
     if (symbol && (strcmp(symbol, "cuGetProcAddress") == 0)) {
         fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
         
-        // Save the real function pointer from the requested handle before we fake the return
-        real_cuGetProcAddress = (cuGetProcAddress_t)real_dlsym(handle, symbol);
         
         return (void*)my_cuGetProcAddress;
     }
@@ -831,8 +1008,6 @@ void* dlsym(void* handle, const char* symbol) {
     if (symbol && (strcmp(symbol, "cuGetProcAddress_v2") == 0)) {
         fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
         
-        // Save the real function pointer from the requested handle before we fake the return
-        real_cuGetProcAddress_v2 = (cuGetProcAddress_t)real_dlsym(handle, symbol);
         
         return (void*)my_cuGetProcAddress_v2;
     }
@@ -850,7 +1025,7 @@ void* dlsym(void* handle, const char* symbol) {
         return (void*)target_func;
     }
 
-    return real_dlsym(handle, symbol);
+    return stream_event_address(symbol, real_dlsym(handle, symbol));
 }
 
 }

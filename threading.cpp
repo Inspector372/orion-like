@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <iostream>
 #include <queue>
+#include <algorithm>
 #include <cstring>
 #include <time.h>
 #include <assert.h>
@@ -41,7 +42,6 @@ std::atomic<int> clients_done{0};
 	while "real_" is used in hooking.cpp.
 */
 cudaError_t (*actual_cudaDeviceSynchronize)(void) = nullptr;
-cudaError_t (*actual_cudaMemset)(void*, int, size_t) = nullptr;
 cudaError_t (*actual_cudaMemsetAsync)(void*, int, size_t, cudaStream_t) = nullptr;
 
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
@@ -56,7 +56,7 @@ void* klib;
 /*
 	Kernel Queue.
 */
-queue<queue_record>** work_queue;
+client_streams* work_queue;
 pthread_mutex_t** work_queue_mutex;
 
 /*	
@@ -71,11 +71,6 @@ bool ready = false;
 	No hook switch. no_hook at hooking.cpp.
 */
 bool* no_hook_thr;
-
-/*
-	Streams for each clients.
-*/
-cudaStream_t** sched_streams;
 
 
 /*
@@ -144,9 +139,6 @@ void register_functions() {
 	*(void**)(&actual_cudaDeviceSynchronize) = dlsym(RTLD_NEXT, "cudaDeviceSynchronize");
     assert(actual_cudaDeviceSynchronize != nullptr);
 
-	*(void**)(&actual_cudaMemset) = dlsym(RTLD_NEXT, "cudaMemset");
-    assert(actual_cudaMemset != nullptr);
-
 	*(void**)(&actual_cudaMemsetAsync) = dlsym(RTLD_NEXT, "cudaMemsetAsync");
     assert(actual_cudaMemsetAsync != nullptr);
 
@@ -159,12 +151,9 @@ void variables_setup() {
 	klib = dlopen("./hooking.so", RTLD_NOW | RTLD_GLOBAL);
 
 	// 1. queue for each thread.
-	queue<queue_record>*** work_queue_ptr = (queue<queue_record>***)dlsym(klib, "work_queue");
-	*work_queue_ptr = (queue<queue_record>**)malloc(THREAD_NUM * sizeof(queue<queue_record>*));
-	work_queue = *work_queue_ptr;
-	for (int i = 0; i < THREAD_NUM; i++) {
-		(*work_queue_ptr)[i] = new queue<queue_record>();
-	}
+    client_streams** work_queue_ptr = (client_streams**)dlsym(klib, "work_queue");
+    work_queue = new client_streams[THREAD_NUM];
+    *work_queue_ptr = work_queue;
 
 	// 2. mutexes for queues.
 	pthread_mutex_t*** mutex_ptr = (pthread_mutex_t***)dlsym(klib, "work_queue_mutex");
@@ -195,28 +184,32 @@ void variables_setup() {
 	
 */
 void create_streams() {
-	int* lp = (int*)malloc(sizeof(int));
-	int* hp = (int*)malloc(sizeof(int));
+    int low_priority, high_priority;
+    cudaError_t status = cudaDeviceGetStreamPriorityRange(&low_priority, &high_priority);
+    if (status != cudaSuccess) {
+        fprintf(stderr, "Cannot get stream priorities: %s\n", cudaGetErrorString(status));
+        std::exit(EXIT_FAILURE);
+    }
 
-	cudaDeviceGetStreamPriorityRange(lp, hp);
+    for (int i = 0; i < THREAD_NUM; ++i) {
+        cudaStream_t stream;
+        int priority = low_priority;
+        if (i == THREAD_NUM - 1 && low_priority != high_priority) priority = high_priority - 1;
+        status = cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, priority);
+        if (status != cudaSuccess) {
+            fprintf(stderr, "Cannot create default stream for client %d: %s\n", i, cudaGetErrorString(status));
+            std::exit(EXIT_FAILURE);
+        }
+        work_queue[i].push_back(std::make_shared<stream_queue>(i, stream));
+    }
 
-	sched_streams = (cudaStream_t**)malloc((THREAD_NUM) * sizeof(cudaStream_t*));
-	for(int i = 0; i < THREAD_NUM - 1; i++) {
-		sched_streams[i] = (cudaStream_t*)malloc(sizeof(cudaStream_t));
-		cudaStreamCreateWithPriority(sched_streams[i], cudaStreamNonBlocking, *lp);
-	}
-	sched_streams[THREAD_NUM - 1] = (cudaStream_t*)malloc(sizeof(cudaStream_t));
-	if(*lp == *hp)
-		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp);
-	else
-		cudaStreamCreateWithPriority(sched_streams[THREAD_NUM - 1], cudaStreamNonBlocking, *hp - 1);
-
- 
-	cudaStreamCreateWithPriority(&metadata_pass_stream, cudaStreamNonBlocking, *hp);
-	cudaStreamCreateWithPriority(&launch_block_stream, cudaStreamNonBlocking, *hp);
-
-	free(lp);
-	free(hp);
+    status = cudaStreamCreateWithPriority(&metadata_pass_stream, cudaStreamNonBlocking, high_priority);
+    if (status == cudaSuccess)
+        status = cudaStreamCreateWithPriority(&launch_block_stream, cudaStreamNonBlocking, high_priority);
+    if (status != cudaSuccess) {
+        fprintf(stderr, "Cannot create scheduler stream: %s\n", cudaGetErrorString(status));
+        std::exit(EXIT_FAILURE);
+    }
 
 }
 
@@ -231,10 +224,51 @@ void assign_launch() {
 	callback_mode = 0;
 	initial_wrapper_run();
 	callback_mode = 1;
-	*no_hook_thr = false;
 }
 
 
+
+// The caller owns the request until done is published. The scheduler alone owns
+// each private marker, so user event destruction/re-recording cannot retarget a wait.
+struct pending_checkpoint {
+    CUevent marker;
+    driver_request* request;
+};
+
+static void finish_request(driver_request* request, CUresult status) {
+    request->status = status;
+    request->done.store(true, std::memory_order_release);
+}
+
+static CUresult record_checkpoint(CUstream stream, CUevent* marker) {
+    CUresult status = cuEventCreate(marker, CU_EVENT_DISABLE_TIMING);
+    if (status != CUDA_SUCCESS) return status;
+    status = cuEventRecord(*marker, stream);
+    if (status != CUDA_SUCCESS) {
+        cuEventDestroy(*marker);
+        *marker = NULL;
+    }
+    return status;
+}
+
+// Take a snapshot of the event's current recording. Give a pending wait its
+// own nonblocking stream so an unrelated wait cannot hold it up.
+static CUresult event_checkpoint(CUevent event, CUevent* marker) {
+    CUresult status = cuEventQuery(event);
+    if (status != CUDA_ERROR_NOT_READY) return status;
+    CUstream stream;
+    status = cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING);
+    if (status != CUDA_SUCCESS) return status;
+    status = cuStreamWaitEvent(stream, event, 0);
+    if (status == CUDA_SUCCESS) status = record_checkpoint(stream, marker);
+    CUresult destroy_status = cuStreamDestroy(stream);
+    if (status == CUDA_SUCCESS && destroy_status != CUDA_SUCCESS) {
+        cuEventDestroy(*marker);
+        *marker = NULL;
+        return destroy_status;
+    }
+    return status;
+}
 
 /*
 	for now, the scheduler runs in round-robin fashion.
@@ -268,7 +302,8 @@ void* scheduler(void* scarg) {
         (CUresult (CUDAAPI *)(void*))memory_dlsym(memory_handle, "cuMemFreeHost");
     assert(actual_cuMemFreeHost != NULL);
 
-	int turn = 0;
+    std::vector<pending_checkpoint> checkpoints;
+    int turn = 0;
     pthread_mutex_lock(&start_mutex);
     ready = true;
     pthread_cond_broadcast(&start_cond);
@@ -276,11 +311,25 @@ void* scheduler(void* scarg) {
     fprintf(stderr, "scheduler init...\n");
 
     while (true) {
+        for (size_t i = 0; i < checkpoints.size();) {
+            pending_checkpoint item = checkpoints[i];
+            CUresult status = cuEventQuery(item.marker);
+            if (status == CUDA_ERROR_NOT_READY) { ++i; continue; }
+            CUresult cleanup = cuEventDestroy(item.marker);
+            checkpoints[i] = checkpoints.back();
+            checkpoints.pop_back();
+            finish_request(item.request, status == CUDA_SUCCESS ? cleanup : status);
+        }
 		// reap every possible event in the release queue, and call hash_delete.
 		bool release_queue_empty = true;
 		for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
 			if(release_queue[i].key != 0) {
-				if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
+				cudaError_t query = cudaEventQuery(release_queue[i].event);
+                if (query != cudaSuccess && query != cudaErrorNotReady) {
+                    fprintf(stderr, "Cannot reap atom: %s\n", cudaGetErrorString(query));
+                    std::exit(EXIT_FAILURE);
+                }
+                if (query == cudaSuccess) {
 					if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
 					cudaEventDestroy(release_queue[i].event);
 					cuMemFree(release_queue[i].launchblock);
@@ -301,20 +350,82 @@ void* scheduler(void* scarg) {
             bool empty = true;
             for (int i = 0; i < THREAD_NUM; ++i) {
                 pthread_mutex_lock(work_queue_mutex[i]);
-                empty &= work_queue[i]->empty();
+                for (const stream_queue_ptr& queue : work_queue[i])
+                    empty &= queue->records.empty();
                 pthread_mutex_unlock(work_queue_mutex[i]);
             }
-            if (empty) return nullptr;
+            if (empty && checkpoints.empty() && release_queue_empty) return nullptr;
         }
 		// pop one from queue, and assign.
 		pthread_mutex_lock(work_queue_mutex[turn]);
-		if(!(*work_queue[turn]).empty()) {
-			// We should delay popping until the end of the execution,
-			// otherwise the client will proceed and may invaildate some arguments.
-			queue_record qrecord = (*work_queue[turn]).front();
-			pthread_mutex_unlock(work_queue_mutex[turn]);
+        stream_queue_ptr queue;
+        for (const stream_queue_ptr& candidate : work_queue[turn]) {
+            if (!candidate->records.empty()) { queue = candidate; break; }
+        }
+        if (queue) {
+            queue_record qrecord = queue->records.front();
+            pthread_mutex_unlock(work_queue_mutex[turn]);
+            CUstream stream = queue->gpu;
+            driver_request* request = NULL;
+            CUresult status = CUDA_SUCCESS;
+            CUevent marker = NULL;
+            stream_queue_ptr created;
+            CUstream rollback_stream = NULL;
 
 			switch(qrecord.type) {
+
+                case RECORD_DEVICE_SYNC:
+                    request = qrecord.data.request;
+                    status = cuEventCreate(&marker, CU_EVENT_DISABLE_TIMING);
+                    if (status == CUDA_SUCCESS) {
+                        status = cuCtxRecordEvent(args->context, marker);
+                        if (status != CUDA_SUCCESS) {
+                            cuEventDestroy(marker);
+                            marker = NULL;
+                        }
+                    }
+                    break;
+                case RECORD_STREAM_CREATE: {
+                    request = qrecord.data.request;
+                    if (!request->stream_out) { status = CUDA_ERROR_INVALID_VALUE; break; }
+                    try {
+                        created = std::make_shared<stream_queue>(turn, nullptr);
+                    } catch (const std::bad_alloc&) {
+                        status = CUDA_ERROR_OUT_OF_MEMORY;
+                        break;
+                    }
+                    status = cuStreamCreate(&created->gpu, request->flags);
+                    if (status != CUDA_SUCCESS) created.reset();
+                    break;
+                }
+                case RECORD_STREAM_DESTROY:
+                    request = qrecord.data.request;
+                    status = request->destroy_stream(request->stream);
+                    break;
+                case RECORD_STREAM_SYNC:
+                    request = qrecord.data.request;
+                    status = record_checkpoint(dispatch_stream(request->stream, stream), &marker);
+                    break;
+                case RECORD_EVENT_CREATE:
+                    request = qrecord.data.request;
+                    status = cuEventCreate(request->event_out, request->flags);
+                    break;
+                case RECORD_EVENT_DESTROY:
+                    request = qrecord.data.request;
+                    status = request->destroy_event(request->event);
+                    break;
+                case RECORD_EVENT_QUERY:
+                    request = qrecord.data.request;
+                    status = cuEventQuery(request->event);
+                    break;
+                case RECORD_EVENT_RECORD:
+                    request = qrecord.data.request;
+                    status = cuEventRecord(request->event, dispatch_stream(request->stream, stream));
+                    break;
+                case RECORD_EVENT_SYNC:
+                    request = qrecord.data.request;
+                    status = event_checkpoint(request->event, &marker);
+                    break;
 
                 case RECORD_CUMEMALLOC: {
                     record_cuMemAlloc record = qrecord.data.r_cuMemAlloc;
@@ -348,6 +459,7 @@ void* scheduler(void* scarg) {
 
 				case RECORD_CULAUNCHKERNEL: {
 					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
+                    stream = dispatch_stream(record.hStream, stream);
 					// fprintf(stderr, "scheduler found pending job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
 					// TODO: how to pass status?
 					launch_lidx = record.lidx;
@@ -362,60 +474,69 @@ void* scheduler(void* scarg) {
     				cuMemsetD32Async(launch_block_memory, 0, 1, (CUstream)launch_block_stream);
 					cuStreamSynchronize(launch_block_stream);
 				
-					cuStreamWaitValue32((CUstream)*sched_streams[turn], launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
+					cuStreamWaitValue32((CUstream)stream, launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
 
-					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, stream, record.kernelParams, record.extra);
 
 					hash_insert(last_key, last_metadata);
 
 					cuStreamWriteValue32((CUstream)launch_block_stream, launch_block_memory, 1, 0);
 					
-					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
+					cudaEventRecord(launch_finish_event, stream);
 					release_queue_insert(last_key, launch_finish_event, launch_block_memory);
 					// fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
 
 				}
 				break;
 
-				case RECORD_CUDAEVENT: {
-					record_cudaEvent record_event = qrecord.data.r_cudaEvent;
-					// fprintf(stderr, "event recorded for #%d\n", turn);
-					if (cudaEventRecord(record_event.event, *sched_streams[turn]) != cudaSuccess) {
-                        // fprintf(stderr, "Scheduler event record failed\n");
-                        std::exit(EXIT_FAILURE);
-                    }
-				}
-				break;
-
-				case RECORD_CUDAMEMSET: {
-					record_cudaMemset record_event = qrecord.data.r_cudaMemset;
-
-					if (actual_cudaMemset(record_event.devPtr, record_event.value, record_event.count) != cudaSuccess) {
-                        fprintf(stderr, "Scheduler memset record failed\n");
-                        std::exit(EXIT_FAILURE);
-                    }
-				}
-				break;
-
-				case RECORD_CUDAMEMSETASYNC: {
-					// We use synchronous version... for now.
-					record_cudaMemsetAsync record_event = qrecord.data.r_cudaMemsetAsync;
-
-					if (actual_cudaMemset(record_event.devPtr, record_event.value, record_event.count) != cudaSuccess) {
-                        fprintf(stderr, "Scheduler memsetAsync record failed\n");
-                        std::exit(EXIT_FAILURE);
-                    }
-				}
-				break;
+                case RECORD_CUDAMEMSET: {
+                    record_cudaMemset record = qrecord.data.r_cudaMemset;
+                    *record.status = actual_cudaMemsetAsync(record.devPtr, record.value, record.count, stream);
+                    break;
+                }
+                case RECORD_CUDAMEMSETASYNC: {
+                    record_cudaMemsetAsync record = qrecord.data.r_cudaMemsetAsync;
+                    stream = dispatch_stream(record.stream, stream);
+                    *record.status = actual_cudaMemsetAsync(record.devPtr, record.value, record.count, stream);
+                    break;
+                }
 
 				default:
 				fprintf(stderr, "Error: unknown record type\n");
                     std::exit(EXIT_FAILURE);
 			}
 			pthread_mutex_lock(work_queue_mutex[turn]);
-			(*work_queue[turn]).pop();
-			pthread_mutex_unlock(work_queue_mutex[turn]);
-
+            queue->records.pop();
+            if (created) {
+                try {
+                    work_queue[turn].push_back(created);
+                    *request->stream_out = created->gpu;
+                } catch (const std::bad_alloc&) {
+                    rollback_stream = created->gpu;
+                    status = CUDA_ERROR_OUT_OF_MEMORY;
+                }
+            }
+            if (qrecord.type == RECORD_STREAM_DESTROY && queue->closing) {
+                if (status == CUDA_SUCCESS) {
+                    client_streams& streams = work_queue[turn];
+                    streams.erase(std::find(streams.begin(), streams.end(), queue));
+                } else {
+                    queue->closing = false;
+                }
+            }
+            queue->retired.fetch_add(1, std::memory_order_release);
+            pthread_mutex_unlock(work_queue_mutex[turn]);
+            if (rollback_stream) cuStreamDestroy(rollback_stream);
+            if (marker) {
+                try {
+                    checkpoints.push_back({marker, request});
+                } catch (const std::bad_alloc&) {
+                    cuEventDestroy(marker);
+                    finish_request(request, CUDA_ERROR_OUT_OF_MEMORY);
+                }
+            } else if (request) {
+                finish_request(request, status);
+            }
 
 		} else {
 			pthread_mutex_unlock(work_queue_mutex[turn]);
@@ -502,6 +623,9 @@ int main(int argc, char** argv) {
 	for (int i = 0; i < THREAD_NUM; i++) {
 		(*tids)[i] = threads[i];
 	}
+
+    // Publish fully initialized queues and thread IDs to the interposer.
+    __atomic_store_n(no_hook_thr, false, __ATOMIC_RELEASE);
 
 	// create scheduler.
 	printf("creating scheduler...\n");
