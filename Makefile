@@ -55,13 +55,11 @@ wrapper.o: wrapper.cu wrapper.h
 	nvcc $(ABI_FLAGS) -G -cudart=shared -std=c++11 -arch=sm_70 -c -o wrapper.o wrapper.cu
 
 # Testcases should work for multiple architectures, but that's for later.
-testcase/%.o: testcase/%.cu testcase/testcase.h testcase/common.cuh
+testcase/%.o: testcase/%.cu testcase/testcase.h
 	nvcc $(ABI_FLAGS) -arch=sm_70 -c $< -o $@
 
 testcase/registry.o: testcase/registry.cpp testcase/testcase.h
 	$(CXX) $(ABI_FLAGS) -std=c++11 -c $< -o $@
-
-testcase/cublaslt_matmul.o testcase/cublaslt_chained.o: testcase/cublaslt_common.cuh
 
 threading: threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o
 	nvcc $(ABI_FLAGS) $(LIBTORCH_LINK_FLAGS) -G -g -Xcompiler -pthread threading.cpp $(TEST_OBJECTS) wrapper.o libsmctrl.o -o threading -ldl -L/usr/local/cuda-12.8/lib64 -lcudart -lcuda -lcublasLt $(CUDNN_LIBS) $(LIBTORCH_LIBS) -L/usr/local/cuda-12.8/lib64/stubs
@@ -72,14 +70,14 @@ clean:
 # Rebuild these four objects when switching optional dependency settings.
 .PHONY: cudnn-force
 cudnn-force:
-$(CUDNN_OBJECTS): testcase/%.o: testcase/%.cu testcase/cudnn_common.cuh testcase/cudnn_reference.h testcase/common.cuh testcase/testcase.h cudnn-force
+$(CUDNN_OBJECTS): testcase/%.o: testcase/%.cu testcase/testcase.h cudnn-force
 ifeq ($(ENABLE_CUDNN),1)
 	@test -f "$(CUDNN_FRONTEND_DIR)/include/cudnn_frontend.h" || (echo "Set CUDNN_FRONTEND_DIR to the cudnn-frontend checkout"; exit 1)
 endif
 	nvcc $(ABI_FLAGS) -std=c++17 -arch=sm_70 $(CUDNN_CPPFLAGS) -c $< -o $@
 
 # LibTorch headers contain host C++ code; compile with g++, not nvcc.
-$(LIBTORCH_OBJECTS): testcase/%.o: testcase/%.cpp testcase/libtorch_common.h testcase/testcase.h
+$(LIBTORCH_OBJECTS): testcase/%.o: testcase/%.cpp testcase/testcase.h
 ifeq ($(ENABLE_LIBTORCH),1)
 	@test -f "$(LIBTORCH_DIR)/include/ATen/ATen.h" -a -f "$(LIBTORCH_DIR)/lib/libtorch_cuda.so" || (echo "Set LIBTORCH_DIR to a CUDA-enabled LibTorch distribution"; exit 1)
 endif

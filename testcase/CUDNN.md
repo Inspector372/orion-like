@@ -68,8 +68,7 @@ the exact FP16 input values. Every output is checked on every iteration, includi
 non-finite values; tolerance is 0.005 + 0.005 * abs(reference). Outputs start as
 NaNs copied from host memory so missing writes are detected. There are no
 explicit cudaMemset calls; cuDNN may perform internal fills or other helper work.
-The shared helper owns plan execution/error reporting, while cudnn_reference.h
-contains CUDA-independent reference calculations.
+Each testcase contains its graph setup, execution, and CPU reference calculation.
 
 ## Scheduler compatibility and validation
 
