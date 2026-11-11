@@ -92,12 +92,11 @@ typedef struct scheduler_arg {
 } scheduler_arg;
 
 
-void hash_insert(uint64_t key, AtomMetaData value) {
+void hash_insert(uint64_t key, AtomMetaData value, CUevent event) {
 	if(key == 0) {
 		fprintf(stderr, "hash_insert: trying to insert a null key. returning.\n");
 	}
-	/* Problem: This can be INSIDE work_queue_mutex critical section, which will cause deadlock */
-	table_insert(key, value);
+	table_insert(key, value, event);
 }
 
 void hash_delete(uint64_t key) {
@@ -283,7 +282,7 @@ void* scheduler(void* scarg) {
 				if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
 					if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
 					cudaEventDestroy(release_queue[i].event);
-					cuMemFree(release_queue[i].launchblock);
+					// cuMemFree(release_queue[i].launchblock);
 					release_queue[i].key = 0;
             		release_queue[i].event = 0;
             		release_queue[i].reaped = false;
@@ -357,21 +356,29 @@ void* scheduler(void* scarg) {
 					cudaEvent_t launch_finish_event;
 					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
 
+					/*
 					CUdeviceptr launch_block_memory = 0;
 					cuMemAlloc(&launch_block_memory, sizeof(uint32_t));
     				cuMemsetD32Async(launch_block_memory, 0, 1, (CUstream)launch_block_stream);
 					cuStreamSynchronize(launch_block_stream);
 				
 					cuStreamWaitValue32((CUstream)*sched_streams[turn], launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
+					*/
+					CUevent metadata_event;
+					cuEventCreate(&metadata_event, CU_EVENT_DEFAULT);
 
+					cuStreamWaitEvent((CUstream)*sched_streams[turn], metadata_event, CU_EVENT_WAIT_DEFAULT);
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 
-					hash_insert(last_key, last_metadata);
+					hash_insert(last_key, last_metadata, metadata_event);
 
+					/*
 					cuStreamWriteValue32((CUstream)launch_block_stream, launch_block_memory, 1, 0);
-					
+					*/
+					cuEventDestroy(metadata_event);
+
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
-					release_queue_insert(last_key, launch_finish_event, launch_block_memory);
+					release_queue_insert(last_key, launch_finish_event);
 					// fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
 
 				}
