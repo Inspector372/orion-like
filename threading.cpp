@@ -227,10 +227,12 @@ void create_streams() {
 	+ call assign_hash_insert() to assign hash insert function to libsmctrl.
 */
 void assign_launch() {
-	libsmctrl_false_launch_callback();
-	callback_mode = 0;
-	initial_wrapper_run();
-	callback_mode = 1;
+	if(NO_WRAPPER != 1) {
+		libsmctrl_false_launch_callback();
+		callback_mode = 0;
+		initial_wrapper_run();
+		callback_mode = 1;
+	}
 	*no_hook_thr = false;
 }
 
@@ -277,23 +279,23 @@ void* scheduler(void* scarg) {
 
     while (true) {
 		// reap every possible event in the release queue, and call hash_delete.
-		bool release_queue_empty = true;
-		for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
+		if(NO_WRAPPER != 1) {
+			for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
 			if(release_queue[i].key != 0) {
 				if(cudaEventQuery(release_queue[i].event) == cudaSuccess) {
 					if(!release_queue[i].reaped) hash_delete(release_queue[i].key);
 					cudaEventDestroy(release_queue[i].event);
-					cuMemFree(release_queue[i].launchblock);
 					release_queue[i].key = 0;
             		release_queue[i].event = 0;
             		release_queue[i].reaped = false;
 					
 				}
-				release_queue_empty = false;
 			}
 			
-		}
+			}
 
+		}
+		
 
         // Clients synchronize before returning. Once every producer has finished,
         // drain all records before stopping. Use an external timeout for hangs.
@@ -356,22 +358,18 @@ void* scheduler(void* scarg) {
 
 					cudaEvent_t launch_finish_event;
 					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
-
-					CUdeviceptr launch_block_memory = 0;
-					cuMemAlloc(&launch_block_memory, sizeof(uint32_t));
-    				cuMemsetD32Async(launch_block_memory, 0, 1, (CUstream)launch_block_stream);
-					cuStreamSynchronize(launch_block_stream);
 				
-					cuStreamWaitValue32((CUstream)*sched_streams[turn], launch_block_memory, 1, CU_STREAM_WAIT_VALUE_EQ);
-
 					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+					if(NO_WRAPPER != 1) {
+						hash_insert(last_key, last_metadata);
 
-					hash_insert(last_key, last_metadata);
+					}
 
-					cuStreamWriteValue32((CUstream)launch_block_stream, launch_block_memory, 1, 0);
 					
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
-					release_queue_insert(last_key, launch_finish_event, launch_block_memory);
+					if(NO_WRAPPER != 1) {
+						release_queue_insert(last_key, launch_finish_event);
+					}
 					// fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
 
 				}

@@ -93,19 +93,8 @@ void table_delete(uint64_t key) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == key) {
             atomMetaDataTable_cache[idx].key = 0;
-            while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
+            while(cuMemcpyHtoD((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData)) != CUDA_SUCCESS) {
                 ;
-            }
-            while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
-                ;
-            }
-            for(;;) {
-                CUresult status = cuEventQuery(copy);
-                if (status == CUDA_SUCCESS) break;
-                if (status != CUDA_ERROR_NOT_READY) {
-                    fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
-                    std::exit(-1);
-                }
             }
             // cuEventSynchronize(copy);
             // cudaEventRecord(copy, metadata_pass_stream);
@@ -122,13 +111,12 @@ void table_delete(uint64_t key) {
 /*
     Helper functions for release_queue.
 */
-void release_queue_insert(uint64_t key, cudaEvent_t event, CUdeviceptr launchblock) {
+void release_queue_insert(uint64_t key, cudaEvent_t event) {
     for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
         if(release_queue[i].key == 0) {
             release_queue[i].key = key;
             release_queue[i].event = event;
             release_queue[i].reaped = false;
-            release_queue[i].launchblock = launchblock;
             return;
         }
     }

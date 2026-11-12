@@ -381,6 +381,10 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 
 	// Atomization.
 	for(int i=0; i<atom_num; i++) {
+        if(NO_WRAPPER == 1) {
+            work_queue[idx]->push(new_qrecord);
+            break;
+        }
 		work_queue[idx]->push(new_qrecord);
 		new_qrecord.data.r_cuLaunchKernel.lidx += atom_size;
 		new_qrecord.data.r_cuLaunchKernel.hidx += atom_size;
