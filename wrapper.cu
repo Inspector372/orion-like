@@ -46,7 +46,7 @@ ReleaseQueueEntry release_queue[RELEASE_QUEUE_LENGTH];
     and atomMetaDataTable_cache MUST be updated too.
 
 */
-void table_insert(uint64_t key, AtomMetaData value, CUevent event) {
+void table_insert(uint64_t key, AtomMetaData value) {
     uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
     AtomMetaData metadata;
 
@@ -68,7 +68,6 @@ void table_insert(uint64_t key, AtomMetaData value, CUevent event) {
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
-            cuEventRecord(event, metadata_pass_stream);
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
@@ -100,7 +99,6 @@ void table_insert(uint64_t key, AtomMetaData value, CUevent event) {
             while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
-            cuEventRecord(event, metadata_pass_stream);
             for(;;) {
                 CUresult status = cuEventQuery(copy);
                 if (status == CUDA_SUCCESS) break;
@@ -164,13 +162,13 @@ void table_delete(uint64_t key) {
 /*
     Helper functions for release_queue.
 */
-void release_queue_insert(uint64_t key, cudaEvent_t event) {
+void release_queue_insert(uint64_t key, cudaEvent_t event, CUdeviceptr launchblock) {
     for(int i = 0; i < RELEASE_QUEUE_LENGTH; i++) {
         if(release_queue[i].key == 0) {
             release_queue[i].key = key;
             release_queue[i].event = event;
             release_queue[i].reaped = false;
-            // release_queue[i].launchblock = launchblock;
+            release_queue[i].launchblock = launchblock;
             return;
         }
     }
