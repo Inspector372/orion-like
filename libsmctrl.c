@@ -9,6 +9,7 @@
 	!!!! THIS IS MODIFIED VERSION !!!!
     Original codes of libsmctrl is on top, and I added my own configurations on bottom.
 */
+#define FULL_MASK (0x1FFFFFFFFFFLL)
 
 #include <cuda.h>
 
@@ -50,6 +51,9 @@ static uint32_t wrapper_progaddr_upper;
 static uint32_t wrapper_progaddr_lower;
 static uint8_t wrapper_register_cnt;
 static uint8_t wrapper_register_cnt_v;
+static uint32_t initial_kernel_upper[32];
+static uint32_t initial_kernel_lower[32];
+static uint32_t initial_kernel_count = 0;
 
 /*
 	External variables.
@@ -551,6 +555,12 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 
 	uint8_t *register_cnt_v_ptr = (uint8_t*)(**((char***)in_params + 8) + 81);
 	uint8_t *register_cnt_ptr = (uint8_t*)(**((char***)in_params + 8) + 123);
+
+	// SM masks.
+	uint32_t *lower_sm_mask_ptr = (uint32_t*)(**((char***)in_params + 8) + 84);
+	uint32_t *upper_sm_mask_ptr = (uint32_t*)(**((char***)in_params + 8) + 88);
+
+	uint64_t this_sm_mask;
 	
 	if (callback_mode == 0) {
 		fprintf(stderr, "libsmctrl: callback mode 0\n");
@@ -560,6 +570,15 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		wrapper_register_cnt_v = *register_cnt_v_ptr;
 	}
 	else if(callback_mode == 1) {
+		for(int i=0; i<initial_kernel_count; i++) {
+			if(*lower_ptr == initial_kernel_lower[i] && *upper_ptr == initial_kernel_upper[i]) {
+				fprintf(stderr, "Called initial kernel [%d]\n", i);
+				this_sm_mask = 0x1FFFFFFFFFELL;
+				*lower_sm_mask_ptr = (uint32_t)(this_sm_mask);
+				*upper_sm_mask_ptr = (uint32_t)(this_sm_mask >> 32);
+				return;
+			}
+		}
 		if(launch_signal == 0) {
 			fprintf(stderr, "[libsmctrl] Warning: Side-path launch aside of scheduler cudaLaunchKernel() detected!\n");
 			return;
@@ -589,6 +608,16 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 			*register_cnt_ptr = wrapper_register_cnt;
 		if(*register_cnt_v_ptr < wrapper_register_cnt_v)
 			*register_cnt_v_ptr = wrapper_register_cnt_v;
+
+		this_sm_mask = 0x1LL;
+		*lower_sm_mask_ptr = (uint32_t)(this_sm_mask);
+		*upper_sm_mask_ptr = (uint32_t)(this_sm_mask >> 32);
+	}
+	else if(callback_mode == 2) {
+		fprintf(stderr, "libsmctrl: callback mode 2\n");
+		initial_kernel_lower[initial_kernel_count] = *lower_ptr;
+		initial_kernel_upper[initial_kernel_count] = *upper_ptr;
+		initial_kernel_count++;
 	}
 	else {
 		fprintf(stderr, "libsmctrl: Unsupported callback mode\n");

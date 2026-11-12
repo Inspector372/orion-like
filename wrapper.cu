@@ -16,6 +16,9 @@ __device__ AtomMetaData atomMetaDataTable[MAP_LENGTH];
 void* atomMetaDataTable_symbol_addr;
 AtomMetaData* atomMetaDataTable_cache;
 
+CUfunction metadata_table_insert_handle;
+CUfunction metadata_table_check_handle;
+
 
 /*
     When a real_cuLaunchKernel launch happens, OS creates an event and saves (key, event) pair.
@@ -50,13 +53,13 @@ void table_insert(uint64_t key, AtomMetaData value) {
     uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
     AtomMetaData metadata;
 
-    // fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
+    fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
     
     // check if the entry is already there!
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[i].key == key) {
             // If %gridid is unique, we should not fall here.
-            fprintf(stderr, "Problem: gridid is not unique or tried to insert incorrect value.\n");
+            fprintf(stderr, "Problem: gridid is not unique or tried to insert incorrect value: %d\n", key);
             std::exit(-1);
             return;
         }
@@ -65,6 +68,9 @@ void table_insert(uint64_t key, AtomMetaData value) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == 0) {
             atomMetaDataTable_cache[idx] = value;
+            metadata_table_insert<<<1, 1, 0, metadata_pass_stream>>>(idx, value);
+            metadata_table_check<<<1, 1, 0, metadata_pass_stream>>>(idx);
+            /*
             while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
@@ -72,6 +78,7 @@ void table_insert(uint64_t key, AtomMetaData value) {
             while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData) + sizeof(uint64_t), &atomMetaDataTable_cache[idx], sizeof(uint64_t), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
+            */
             break;
         }
         idx = (idx + 1) % MAP_LENGTH;
@@ -93,9 +100,13 @@ void table_delete(uint64_t key) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == key) {
             atomMetaDataTable_cache[idx].key = 0;
-            while(cuMemcpyHtoD((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData)) != CUDA_SUCCESS) {
+            // TODO: this must be synchronous.
+            metadata_table_insert<<<1, 1, 0, metadata_pass_stream>>>(idx, atomMetaDataTable_cache[idx]);
+            /*
+            while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
+            */
             // cuEventSynchronize(copy);
             // cudaEventRecord(copy, metadata_pass_stream);
             // cudaEventSynchronize(copy);
@@ -146,8 +157,6 @@ void release_queue_delete(uint64_t key) {
 
 /*
     Kernel wrapper.
-    
-    
 
 */
 __global__ void wrapper(const __grid_constant__ uint64_t argu) {
@@ -178,6 +187,16 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu) {
 
     ((func_ptr_t)kernel)();
 } 
+
+__global__ void metadata_table_insert(uint32_t index, AtomMetaData metadata) {
+    if(index >= MAP_LENGTH) return;
+    atomMetaDataTable[index] = metadata;
+}
+
+__global__ void metadata_table_check(uint32_t index) {
+    if(index >= MAP_LENGTH) return;
+    atomMetaDataTable[index].concurrent_key = atomMetaDataTable[index].key;
+}
     
 void setup_metadata() {
     AtomMetaData zero_ptrs[MAP_LENGTH];
@@ -199,6 +218,22 @@ void setup_metadata() {
 void initial_wrapper_run() {
     uint64_t fakearg = MAGIC;
     wrapper<<<1, 1>>>(fakearg);
+
+    (*actual_cudaDeviceSynchronize)();
+}
+
+/*
+    Extracts PROGRAM_ADDRESS for Metadata table.
+*/
+void initial_kernels_run() {
+    AtomMetaData blank;
+    cudaFunction_t func;
+    metadata_table_insert<<<1, 1>>>(MAP_LENGTH, blank);
+    cudaGetFuncBySymbol(&func, (const void*)metadata_table_insert);
+    metadata_table_insert_handle = (CUfunction)func;
+    metadata_table_check<<<1, 1>>>(MAP_LENGTH);
+    cudaGetFuncBySymbol(&func, (const void*)metadata_table_check);
+    metadata_table_check_handle = (CUfunction)func;
     (*actual_cudaDeviceSynchronize)();
 }
 

@@ -231,6 +231,8 @@ void assign_launch() {
 		libsmctrl_false_launch_callback();
 		callback_mode = 0;
 		initial_wrapper_run();
+		callback_mode = 2;
+		initial_kernels_run();
 		callback_mode = 1;
 	}
 	*no_hook_thr = false;

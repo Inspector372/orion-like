@@ -1,5 +1,4 @@
-#define NO_WRAPPER 1
-
+#define NO_WRAPPER 0
 
 #define THREAD_NUM 9
 

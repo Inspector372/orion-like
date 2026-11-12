@@ -319,7 +319,10 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	if(no_hook) {
 		return real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
 	}
-	int idx = get_idx();
+	int idx = memory_client_idx();
+    if(idx == -1) {
+        return real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
+    }
 	// fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
 	cudaLaunchKernel_launched[idx] = true;
 	cudaError_t err = real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
@@ -351,7 +354,11 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 		return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
 	}
 
-	int idx = get_idx();
+	int idx = memory_client_idx();
+    if(idx == -1) {
+        fprintf(stderr, "Warning: launch from non-client, maybe scheduler?\n");
+        return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
+    }
 	fprintf(stderr, "[cuHook] caught call from %d!\n", idx);
 
 	// inspect kernel size and setup atomization info.
