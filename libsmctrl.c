@@ -34,17 +34,13 @@ struct global_sm_control {
 /*
 	AtomMetaData structure that is used on wrapper.
 	Additional fields can be added.
-
-	'signal' is special field that detects other launches outside host-call.
-	its used for debugging purpose.
 */
 typedef struct AtomMetaData_t{
 	uint64_t key;
+	uint64_t concurrent_key;
     uint64_t kernel; 
     uint32_t lidx;
     uint32_t hidx; 
-
-	uint32_t signal;
 } AtomMetaData_t;
 
 /*
@@ -576,6 +572,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		AtomMetaData_t metadata;
 		// metadata.key = buffer_addr + 0x160;
 		metadata.key = grid_id;
+		metadata.concurrent_key = 0;
 		metadata.kernel = program_addr;
 		metadata.lidx = launch_lidx;
 		metadata.hidx = launch_hidx;

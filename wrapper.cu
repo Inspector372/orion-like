@@ -50,39 +50,11 @@ void table_insert(uint64_t key, AtomMetaData value) {
     uint64_t idx = (key * 11400714819323198485ULL) % MAP_LENGTH;
     AtomMetaData metadata;
 
-    CUevent copy;
-    cuEventCreate(&copy, CU_EVENT_DISABLE_TIMING);
-
-    // cudaEvent_t copy;
-    // cudaEventCreateWithFlags(&copy, cudaEventBlockingSync | cudaEventDisableTiming);
-
     // fprintf(stderr, "trying to insert key: %lx, value: %lx, %lx, %d, %d inside table...\n", key, value.key, value.kernel, value.lidx, value.hidx);
     
     // check if the entry is already there!
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[i].key == key) {
-            atomMetaDataTable_cache[i] = value;
-            while(cudaMemcpyToSymbolAsync(atomMetaDataTable, &atomMetaDataTable_cache[i], sizeof(AtomMetaData), sizeof(AtomMetaData) * i, cudaMemcpyHostToDevice, metadata_pass_stream) != cudaSuccess) {
-                ;
-            }
-            while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
-                ;
-            }
-            for(;;) {
-                CUresult status = cuEventQuery(copy);
-                if (status == CUDA_SUCCESS) break;
-                if (status != CUDA_ERROR_NOT_READY) {
-                    fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
-                    std::exit(-1);
-                }
-            }
-            // cuEventSynchronize(copy);
-            //cudaEventRecord(copy, metadata_pass_stream);
-            //cudaEventSynchronize(copy);
-            release_queue_mark_as_reaped(key);
-            cuEventDestroy(copy);
-            //cudaEventDestroy(copy);
-
             // If %gridid is unique, we should not fall here.
             fprintf(stderr, "Problem: gridid is not unique or tried to insert incorrect value.\n");
             std::exit(-1);
@@ -96,26 +68,14 @@ void table_insert(uint64_t key, AtomMetaData value) {
             while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
-            while(cuEventRecord(copy, metadata_pass_stream) != CUDA_SUCCESS) {
+            atomMetaDataTable_cache[idx].concurrent_key = atomMetaDataTable_cache[idx].key;
+            while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData) + sizeof(uint64_t), &atomMetaDataTable_cache[idx], sizeof(uint64_t), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
             }
-            for(;;) {
-                CUresult status = cuEventQuery(copy);
-                if (status == CUDA_SUCCESS) break;
-                if (status != CUDA_ERROR_NOT_READY) {
-                    fprintf(stderr, "metadata event failed: key=%llu status=%d\n", (unsigned long long)key, (int)status);
-                    std::exit(-1);
-                }
-            }
-            // cuEventSynchronize(copy);
-            // cudaEventRecord(copy, metadata_pass_stream);
-            // cudaEventSynchronize(copy);
             break;
         }
         idx = (idx + 1) % MAP_LENGTH;
     }
-    cuEventDestroy(copy);
-    // cudaEventDestroy(copy);
     return;
 
 }
@@ -212,10 +172,9 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu) {
     uint64_t idx = (gid * 11400714819323198485ULL) % MAP_LENGTH;
     
 
-
-    int i;
-    for(i = 0; i < MAP_LENGTH; i++) {
-        if(atomMetaDataTable[idx].key == gid) {
+    // Spin until finding the concurrent key.
+    for(;;) {
+        if(atomMetaDataTable[idx].concurrent_key == gid) {
             break;
         }
         idx = (idx + 1) % MAP_LENGTH;

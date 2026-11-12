@@ -2,6 +2,7 @@
 
 typedef struct AtomMetaData {
     uint64_t key;
+    uint64_t concurrent_key;
     uint64_t kernel; 
     uint32_t lidx;
     uint32_t hidx; 
