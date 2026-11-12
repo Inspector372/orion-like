@@ -64,6 +64,7 @@ uint32_t launch_signal;
 uint32_t callback_mode = 0;
 uint64_t last_key;
 AtomMetaData_t last_metadata;
+uint32_t last_client;
 
 /*
 	Callback function for inserting key and value into hash table.
@@ -573,7 +574,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		for(int i=0; i<initial_kernel_count; i++) {
 			if(*lower_ptr == initial_kernel_lower[i] && *upper_ptr == initial_kernel_upper[i]) {
 				fprintf(stderr, "Called initial kernel [%d]\n", i);
-				this_sm_mask = 0x1FFFFFFFFFELL;
+				this_sm_mask = 0x1FFFFFFFFFCLL;
 				*lower_sm_mask_ptr = (uint32_t)(this_sm_mask);
 				*upper_sm_mask_ptr = (uint32_t)(this_sm_mask >> 32);
 				return;
@@ -584,7 +585,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 			return;
 		}
 		launch_signal = 0;
-		// fprintf(stderr, "libsmctrl: callback mode 1\n");
+		fprintf(stderr, "libsmctrl: callback mode 1\n");
 		uint64_t program_addr = ((uint64_t)(*upper_ptr) << 32) + (uint64_t)(*lower_ptr);
 		uint64_t buffer_addr = (*buffer_start) & 0x0001ffffffffffff;
 		
@@ -609,7 +610,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		if(*register_cnt_v_ptr < wrapper_register_cnt_v)
 			*register_cnt_v_ptr = wrapper_register_cnt_v;
 
-		this_sm_mask = 0x1LL;
+		this_sm_mask = FULL_MASK - ((0xCLL) << (last_client * 2));
 		*lower_sm_mask_ptr = (uint32_t)(this_sm_mask);
 		*upper_sm_mask_ptr = (uint32_t)(this_sm_mask >> 32);
 	}

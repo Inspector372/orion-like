@@ -107,8 +107,9 @@ void table_delete(uint64_t key) {
                 ;
             }
             */
-            // cuEventSynchronize(copy);
-            // cudaEventRecord(copy, metadata_pass_stream);
+            
+            cudaEventRecord(copy, metadata_pass_stream);
+            cuEventSynchronize(copy);
             // cudaEventSynchronize(copy);
             break;
         }

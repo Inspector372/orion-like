@@ -360,8 +360,15 @@ void* scheduler(void* scarg) {
 
 					cudaEvent_t launch_finish_event;
 					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
-				
-					(*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+					
+					last_client = turn;
+
+					CUresult result;
+					result = (*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+					if(result != CUDA_SUCCESS) {
+						fprintf(stderr, "kernel launch error : %d\n", result);
+						std::exit(1);
+					}
 					if(NO_WRAPPER != 1) {
 						hash_insert(last_key, last_metadata);
 
