@@ -198,6 +198,10 @@ __global__ void metadata_table_check(uint32_t index) {
     if(index >= MAP_LENGTH) return;
     atomMetaDataTable[index].concurrent_key = atomMetaDataTable[index].key;
 }
+
+__global__ void nothing() {
+    return;
+}
     
 void setup_metadata() {
     AtomMetaData zero_ptrs[MAP_LENGTH];
@@ -229,6 +233,7 @@ void initial_wrapper_run() {
 void initial_kernels_run() {
     AtomMetaData blank;
     cudaFunction_t func;
+    nothing<<<1, 1>>>();
     metadata_table_insert<<<1, 1>>>(MAP_LENGTH, blank);
     cudaGetFuncBySymbol(&func, (const void*)metadata_table_insert);
     metadata_table_insert_handle = (CUfunction)func;

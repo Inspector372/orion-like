@@ -384,8 +384,9 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	new_record_data.r_cuLaunchKernel = new_record;
 	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
 
-	pthread_mutex_lock(work_queue_mutex[idx]);
+    // real_cuLaunchKernel(f, 20, 21, 22, 1, 1, 1, sharedMemBytes, 0, kernelParams, extra);
 
+	pthread_mutex_lock(work_queue_mutex[idx]);
 	// Atomization.
 	for(int i=0; i<atom_num; i++) {
         if(NO_WRAPPER == 1) {

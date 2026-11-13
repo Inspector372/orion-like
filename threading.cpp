@@ -364,6 +364,7 @@ void* scheduler(void* scarg) {
 					last_client = turn;
 
 					CUresult result;
+					// (*actual_cuLaunchKernel)(record.f, 20, 21, 22, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					result = (*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					if(result != CUDA_SUCCESS) {
 						fprintf(stderr, "kernel launch error : %d\n", result);

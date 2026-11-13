@@ -49,6 +49,7 @@ typedef struct AtomMetaData_t{
 */
 static uint32_t wrapper_progaddr_upper;
 static uint32_t wrapper_progaddr_lower;
+
 static uint8_t wrapper_register_cnt;
 static uint8_t wrapper_register_cnt_v;
 static uint32_t initial_kernel_upper[32];
@@ -543,6 +544,10 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		fprintf(stderr, "Called with NULL halLaunchDataAllocation\n");
 		return;
 	}
+	// grid X, Y, Z
+	uint32_t *grid_X = (uint32_t*)(**((char***)in_params + 8) + 48);
+	uint16_t *grid_Y = (uint32_t*)(**((char***)in_params + 8) + 52);
+	uint16_t *grid_Z = (uint32_t*)(**((char***)in_params + 8) + 56);
 
 	// PROGRAM_ADDRESS fields.
 	uint32_t *lower_ptr = (uint32_t*)(**((char***)in_params + 8) + 192);
@@ -571,6 +576,18 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		wrapper_register_cnt_v = *register_cnt_v_ptr;
 	}
 	else if(callback_mode == 1) {
+		if(*grid_X == 20 && *grid_Y == 21 && *grid_Z == 22) {
+			fprintf(stderr, "Fake launch\n");
+			this_sm_mask = FULL_MASK - ((0xCLL) << (9 * 2));
+			*lower_sm_mask_ptr = (uint32_t)(this_sm_mask);
+			*upper_sm_mask_ptr = (uint32_t)(this_sm_mask >> 32);
+			// *upper_ptr = initial_kernel_upper[0];
+			// *lower_ptr = initial_kernel_lower[0];
+
+			return;
+		}
+
+
 		for(int i=0; i<initial_kernel_count; i++) {
 			if(*lower_ptr == initial_kernel_lower[i] && *upper_ptr == initial_kernel_upper[i]) {
 				fprintf(stderr, "Called initial kernel [%d]\n", i);
