@@ -16,8 +16,11 @@ __device__ AtomMetaData atomMetaDataTable[MAP_LENGTH];
 void* atomMetaDataTable_symbol_addr;
 AtomMetaData* atomMetaDataTable_cache;
 
+CUfunction wrapper_handle;
 CUfunction metadata_table_insert_handle;
 CUfunction metadata_table_check_handle;
+
+
 
 
 /*
@@ -168,7 +171,6 @@ __global__ void wrapper(const __grid_constant__ uint64_t argu) {
     uint64_t gid;
     asm volatile("mov.u64 %0, %%gridid;" : "=l"(gid));
     uint64_t idx = (gid * 11400714819323198485ULL) % MAP_LENGTH;
-    
 
     // Spin until finding the concurrent key.
     for(;;) {
@@ -223,6 +225,9 @@ void setup_metadata() {
 void initial_wrapper_run() {
     uint64_t fakearg = MAGIC;
     wrapper<<<1, 1>>>(fakearg);
+    cudaFunction_t func;
+    cudaGetFuncBySymbol(&func, (const void*)wrapper);
+    wrapper_handle = (CUfunction)func;
 
     (*actual_cudaDeviceSynchronize)();
 }

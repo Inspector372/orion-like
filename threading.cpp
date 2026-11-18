@@ -181,6 +181,10 @@ void variables_setup() {
 
 	// 5. Setup metadata table.
 	setup_metadata();
+
+	// 6. wrapper handle.
+	CUfunction* wrapper_handle_hook_ptr = (CUfunction*)dlsym(klib, "wrapper_handle_hook");
+	*wrapper_handle_hook_ptr = wrapper_handle;
 	
 
 	// for now, those are just all. now we can use those variables in hooking.cpp.

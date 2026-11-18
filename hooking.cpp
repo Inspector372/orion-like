@@ -97,6 +97,11 @@ void* cu_handle = NULL;
 */
 bool cudaLaunchKernel_launched[THREAD_NUM];
 
+/*
+    variable of wrapper_handle to be used here...?
+*/
+CUfunction wrapper_handle_hook;
+
 
 int get_idx() {
 	assert(thread_ids != NULL);
@@ -384,6 +389,10 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	new_record_data.r_cuLaunchKernel = new_record;
 	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
 
+
+    uint64_t magic_arg = 0x2020064020200640ULL;
+    void* wrapper_params[] = {&magic_arg};
+    real_cuLaunchKernel(wrapper_handle_hook, 20, 21, 22, 1, 1, 1, 0, 0, wrapper_params, nullptr);
     // real_cuLaunchKernel(f, 20, 21, 22, 1, 1, 1, sharedMemBytes, 0, kernelParams, extra);
 
 	pthread_mutex_lock(work_queue_mutex[idx]);
