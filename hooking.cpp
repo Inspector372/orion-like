@@ -85,6 +85,15 @@ typedef CUresult (*cuGetProcAddress_t)(const char*, void**, int, unsigned int, v
 cuGetProcAddress_t real_cuGetProcAddress = NULL;
 cuGetProcAddress_t real_cuGetProcAddress_v2 = NULL;
 
+
+/*
+    APIs that need *context synchronization*.
+    running of these API blocks every kernel launch, and they need to wait until all works are completed.
+    it's never invoked before one cycle of kernel: kernel-metadata insert-metadata check is finished.
+*/
+CUresult (*real_cuLibraryGetModule)(CUmodule*, CUlibrary) = NULL;
+CUresult (*real_cuLibraryLoadData)(CUlibrary* library, const void* code, CUjit_option* jitOptions, void** jitOptionsValues, unsigned int  numJitOptions, CUlibraryOption* libraryOptions, void** libraryOptionValues, unsigned int  numLibraryOptions) = NULL;
+
 /*
 	Real instance of dlsym().
 */
@@ -101,6 +110,11 @@ bool cudaLaunchKernel_launched[THREAD_NUM];
     variable of wrapper_handle to be used here...?
 */
 CUfunction wrapper_handle_hook;
+
+/*
+    Context synchronization mutex.
+*/
+pthread_mutex_t* context_sync_mutex_thr;
 
 
 int get_idx() {
@@ -330,7 +344,9 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
     }
 	// fprintf(stderr, "[cudaHook] caught call from %d!\n", idx);
 	cudaLaunchKernel_launched[idx] = true;
+    // pthread_mutex_lock(context_sync_mutex_thr);
 	cudaError_t err = real_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
+    // pthread_mutex_unlock(context_sync_mutex_thr);
 	cudaLaunchKernel_launched[idx] = false;
 	// fprintf(stderr, "[cudaHook] block-start from %d!\n", idx);
 	block(idx, work_queue_mutex, work_queue);
@@ -573,6 +589,44 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t 
 	return cudaSuccess;
 }
 
+
+/*
+    Hooks for APIs that need context synchronizations.
+*/
+CUresult cuLibraryGetModule(CUmodule* pMod, CUlibrary library) {
+    if(real_cuLibraryGetModule == NULL) {
+        real_cuLibraryGetModule = (CUresult (*)(CUmodule*, CUlibrary))real_dlsym(RTLD_NEXT, "cuLibraryGetModule");
+        if(real_cuLibraryGetModule == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuLibraryGetModule == NULL\n");
+        }
+    }
+    if(no_hook) {
+        return real_cuLibraryGetModule(pMod, library);
+    }
+    // Wait until whole cuLaunchKernel -> metadata insert -> metadata check is finished.
+    pthread_mutex_lock(context_sync_mutex_thr);
+    CUresult result = real_cuLibraryGetModule(pMod, library);
+    pthread_mutex_unlock(context_sync_mutex_thr);
+    return result;
+}
+
+CUresult cuLibraryLoadData(CUlibrary* library, const void* code, CUjit_option* jitOptions, void** jitOptionsValues, unsigned int  numJitOptions, CUlibraryOption* libraryOptions, void** libraryOptionValues, unsigned int  numLibraryOptions) {
+    if(real_cuLibraryLoadData == NULL) {
+        real_cuLibraryLoadData = (CUresult (*)(CUlibrary*, const void*, CUjit_option*, void**, unsigned int, CUlibraryOption*, void**, unsigned int))real_dlsym(RTLD_NEXT, "cuLibraryLoadData");
+        if(real_cuLibraryLoadData == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuLibraryLoadData == NULL\n");
+        }
+    }
+    if(no_hook) {
+        return real_cuLibraryLoadData(library, code, jitOptions, jitOptionsValues, numJitOptions, libraryOptions, libraryOptionValues, numLibraryOptions);
+    }
+    // Wait until whole cuLaunchKernel -> metadata insert -> metadata check is finished.
+    pthread_mutex_lock(context_sync_mutex_thr);
+    CUresult result = real_cuLibraryLoadData(library, code, jitOptions, jitOptionsValues, numJitOptions, libraryOptions, libraryOptionValues, numLibraryOptions);
+    pthread_mutex_unlock(context_sync_mutex_thr);
+    return result;
+}
+
 /*
 	cuGetProcAddress is ACTUALLY where we redirect driver APIs.
 	for convenience(and maybe existing just name mangling way of linking), we set the exact same name for driver API hooks,
@@ -646,6 +700,18 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
         return status;
     }
     // fprintf(stderr, "[HOOK v1] Inside cuGetProcAddress looking for: %s\n", symbol);
+
+    if (symbol && strcmp(symbol, "cuLibraryLoadData") == 0) {
+        fprintf(stderr, "[HOOK v2] Hijacking cuLibraryLoadData pointer assignment!\n");
+        *pfn = (void*)cuLibraryLoadData;
+        return CUDA_SUCCESS;
+    }
+
+    if (symbol && strcmp(symbol, "cuLibraryGetModule") == 0) {
+        fprintf(stderr, "[HOOK v2] Hijacking cuLibraryGetModule pointer assignment!\n");
+        *pfn = (void*)cuLibraryGetModule;
+        return CUDA_SUCCESS;
+    }
 
     if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
         fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel pointer assignment!\n");
@@ -761,6 +827,18 @@ CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion,
         return status;
     }
     // fprintf(stderr, "[HOOK v2] Inside cuGetProcAddress_v2 looking for: %s\n", symbol);
+
+    if (symbol && strcmp(symbol, "cuLibraryLoadData") == 0) {
+        fprintf(stderr, "[HOOK v2] Hijacking cuLibraryLoadData pointer assignment!\n");
+        *pfn = (void*)cuLibraryLoadData;
+        return CUDA_SUCCESS;
+    }
+
+    if (symbol && strcmp(symbol, "cuLibraryGetModule") == 0) {
+        fprintf(stderr, "[HOOK v2] Hijacking cuLaunchKernel pointer assignment!\n");
+        *pfn = (void*)cuLibraryGetModule;
+        return CUDA_SUCCESS;
+    }
 
     if (symbol && strcmp(symbol, "cuLaunchKernel") == 0) {
         fprintf(stderr, "[HOOK v2] Hijacking cuLaunchKernel pointer assignment!\n");

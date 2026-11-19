@@ -91,6 +91,10 @@ typedef struct scheduler_arg {
 	CUcontext context;
 } scheduler_arg;
 
+/*
+	Mutex for context synchronization.
+*/
+pthread_mutex_t* context_sync_mutex;
 
 void hash_insert(uint64_t key, AtomMetaData value) {
 	if(key == 0) {
@@ -185,6 +189,12 @@ void variables_setup() {
 	// 6. wrapper handle.
 	CUfunction* wrapper_handle_hook_ptr = (CUfunction*)dlsym(klib, "wrapper_handle_hook");
 	*wrapper_handle_hook_ptr = wrapper_handle;
+
+	// 7. mutex for context synchronization.
+	context_sync_mutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
+	pthread_mutex_init(context_sync_mutex, NULL);
+	pthread_mutex_t** context_sync_mutex_ptr = (pthread_mutex_t**)dlsym(klib, "context_sync_mutex_thr");
+	*context_sync_mutex_ptr = context_sync_mutex;
 	
 
 	// for now, those are just all. now we can use those variables in hooking.cpp.
@@ -369,6 +379,7 @@ void* scheduler(void* scarg) {
 
 					CUresult result;
 					// (*actual_cuLaunchKernel)(record.f, 20, 21, 22, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+					pthread_mutex_lock(context_sync_mutex);
 					result = (*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					if(result != CUDA_SUCCESS) {
 						fprintf(stderr, "kernel launch error : %d\n", result);
@@ -376,9 +387,8 @@ void* scheduler(void* scarg) {
 					}
 					if(NO_WRAPPER != 1) {
 						hash_insert(last_key, last_metadata);
-
 					}
-
+					pthread_mutex_unlock(context_sync_mutex);
 					
 					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
 					if(NO_WRAPPER != 1) {
