@@ -7,6 +7,8 @@ enum record_type {
 	RECORD_CUDAEVENT,
 	RECORD_CUDAMEMSET,
 	RECORD_CUDAMEMSETASYNC,
+	RECORD_CUDAMEMCPY,
+	RECORD_CUDAMEMCPYASYNC,
 	RECORD_CUMEMALLOC,
 	RECORD_CUMEMALLOCHOST,
 	RECORD_CUMEMHOSTALLOC,
@@ -49,6 +51,21 @@ typedef struct record_cudaMemsetAsync {
 	cudaStream_t stream;
 } record_cudaMemsetAsync;
 
+typedef struct record_cudaMemcpy {
+	void* dst;
+	const void* src;
+	size_t count;
+	cudaMemcpyKind kind;
+} record_cudaMemcpy;
+
+typedef struct record_cudaMemcpyAsync {
+	void* dst;
+	const void* src;
+	size_t count;
+	cudaMemcpyKind kind;
+	cudaStream_t stream;
+} record_cudaMemcpyAsync;
+
 typedef struct record_cuMemAlloc {
 	CUdeviceptr* dptr;
 	size_t bytesize;
@@ -88,6 +105,8 @@ union record_data {
 	record_cudaEvent r_cudaEvent;
 	record_cudaMemset r_cudaMemset;
 	record_cudaMemsetAsync r_cudaMemsetAsync;
+	record_cudaMemcpy r_cudaMemcpy;
+	record_cudaMemcpyAsync r_cudaMemcpyAsync;
 
 	record_data() {}
 	~record_data(){};

@@ -43,6 +43,8 @@ std::atomic<int> clients_done{0};
 cudaError_t (*actual_cudaDeviceSynchronize)(void) = nullptr;
 cudaError_t (*actual_cudaMemset)(void*, int, size_t) = nullptr;
 cudaError_t (*actual_cudaMemsetAsync)(void*, int, size_t, cudaStream_t) = nullptr;
+cudaError_t (*actual_cudaMemcpy)(void*, const void*, size_t, cudaMemcpyKind) = nullptr;
+cudaError_t (*actual_cudaMemcpyAsync)(void*, const void*, size_t, cudaMemcpyKind, cudaStream_t) = nullptr;
 
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 CUresult (*actual_cuFuncGetParamInfo)(CUfunction, size_t, size_t*, size_t*);
@@ -154,6 +156,13 @@ void register_functions() {
 
 	*(void**)(&actual_cudaMemsetAsync) = dlsym(RTLD_NEXT, "cudaMemsetAsync");
     assert(actual_cudaMemsetAsync != nullptr);
+
+	*(void**)(&actual_cudaMemcpy) = dlsym(RTLD_NEXT, "cudaMemcpy");
+    assert(actual_cudaMemcpy != nullptr);
+
+	*(void**)(&actual_cudaMemcpyAsync) = dlsym(RTLD_NEXT, "cudaMemcpyAsync");
+    assert(actual_cudaMemcpyAsync != nullptr);
+	
 
     // assign hash_insert_callback of libsmctrl.
 	assign_hash_insert((void*)hash_insert);
@@ -426,6 +435,27 @@ void* scheduler(void* scarg) {
 
 					if (actual_cudaMemset(record_event.devPtr, record_event.value, record_event.count) != cudaSuccess) {
                         fprintf(stderr, "Scheduler memsetAsync record failed\n");
+                        std::exit(EXIT_FAILURE);
+                    }
+				}
+				break;
+
+				case RECORD_CUDAMEMCPY: {
+					record_cudaMemcpy record_event = qrecord.data.r_cudaMemcpy;
+
+					if (actual_cudaMemcpy(record_event.dst, record_event.src, record_event.count, record_event.kind) != cudaSuccess) {
+                        fprintf(stderr, "Scheduler memcpy record failed\n");
+                        std::exit(EXIT_FAILURE);
+                    }
+				}
+				break;
+
+				case RECORD_CUDAMEMCPYASYNC: {
+					// We use synchronous version... for now.
+					record_cudaMemcpyAsync record_event = qrecord.data.r_cudaMemcpyAsync;
+
+					if (actual_cudaMemcpy(record_event.dst, record_event.src, record_event.count, record_event.kind) != cudaSuccess) {
+                        fprintf(stderr, "Scheduler memcpy record failed\n");
                         std::exit(EXIT_FAILURE);
                     }
 				}

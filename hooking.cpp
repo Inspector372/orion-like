@@ -70,6 +70,9 @@ pthread_mutex_t** work_queue_mutex;
 */
 cudaError_t (*real_cudaMemset)(void* devPtr, int value, size_t count) = NULL;
 cudaError_t (*real_cudaMemsetAsync)(void* devPtr, int value, size_t count, cudaStream_t stream) = NULL;
+cudaError_t (*real_cudaMemcpy)(void* dst, const void* src, size_t count, cudaMemcpyKind kind) = NULL;
+cudaError_t (*real_cudaMemcpyAsync)(void* dst, const void* src, size_t count, cudaMemcpyKind kind, cudaStream_t stream) = NULL;
+
 cudaError_t (*real_cudaLaunchKernel)(const void*, dim3, dim3, void**, size_t, cudaStream_t) = NULL;
 CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
 CUresult (*real_cuLaunchKernelEx)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) = NULL;
@@ -589,6 +592,64 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count, cudaStream_t 
 	return cudaSuccess;
 }
 
+cudaError_t cudaMemcpy(void* dst, const void* src, size_t count, cudaMemcpyKind kind) {
+	if (real_cudaMemcpy == NULL) {
+        real_cudaMemcpy = (cudaError_t (*)(void*, const void*, size_t, cudaMemcpyKind))real_dlsym(RTLD_NEXT, "cudaMemcpy");
+        if(real_cudaMemcpy == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cudaMemcpy == NULL\n");
+        }
+    }
+	int idx = get_idx();
+	fprintf(stderr, "[cudaMemcpyHook] hooked from %d!\n", idx);
+
+	assert(work_queue_mutex != NULL);
+	assert(work_queue != NULL);
+
+	record_cudaMemcpy new_record;
+	new_record = {dst, src, count, kind};
+	union record_data new_record_data;
+	new_record_data.r_cudaMemcpy = new_record;
+	queue_record new_qrecord = {RECORD_CUDAMEMCPY, new_record_data};
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+	work_queue[idx]->push(new_qrecord);
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+	
+	fprintf(stderr, "[cudaMemcpyHook] blocking from %d!\n", idx);
+	block(idx, work_queue_mutex, work_queue);
+	fprintf(stderr, "[cudaMemcpyHook] unblocking from %d!\n", idx);
+
+	return cudaSuccess;
+
+}
+
+cudaError_t cudaMemcpyAsync(void* dst, const void* src, size_t count, cudaMemcpyKind kind, cudaStream_t stream) {
+	if (real_cudaMemcpyAsync == NULL) {
+        real_cudaMemcpyAsync = (cudaError_t (*)(void*, const void*, size_t, cudaMemcpyKind, cudaStream_t))real_dlsym(RTLD_NEXT, "cudaMemcpyAsync");
+        if(real_cudaMemcpyAsync == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cudaMemcpyAsync == NULL\n");
+        }
+    }
+	int idx = get_idx();
+	fprintf(stderr, "[cudaMemcpyAsyncHook] hooked from %d!\n", idx);
+
+	assert(work_queue_mutex != NULL);
+	assert(work_queue != NULL);
+
+	record_cudaMemcpyAsync new_record;
+	new_record = {dst, src, count, kind, stream};
+	union record_data new_record_data;
+	new_record_data.r_cudaMemcpyAsync = new_record;
+	queue_record new_qrecord = {RECORD_CUDAMEMCPYASYNC, new_record_data};
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+	work_queue[idx]->push(new_qrecord);
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+	
+
+	return cudaSuccess;
+
+}
 
 /*
     Hooks for APIs that need context synchronizations.
