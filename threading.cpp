@@ -140,6 +140,7 @@ void register_functions() {
 	void* (*actual_dlsym)(void*, const char*) = (void* (*)(void*, const char*))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");;
 	*(void **)(&actual_cuLaunchKernel) = actual_dlsym(handle, "cuLaunchKernel");
 	assert(actual_cuLaunchKernel != NULL);
+	actual_cuLaunchKernel_wrapper = actual_cuLaunchKernel;
 
 	*(void **)(&actual_cuFuncGetParamInfo) = actual_dlsym(handle, "cuFuncGetParamInfo");
 	assert(actual_cuFuncGetParamInfo != NULL);
