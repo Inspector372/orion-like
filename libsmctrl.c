@@ -591,8 +591,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 			*upper_sm_mask_ptr = (uint32_t)(this_sm_mask >> 32);
 			// *upper_ptr = initial_kernel_upper[0];
 			// *lower_ptr = initial_kernel_lower[0];
-
-			return;
+			exit(1);
 		}
 
 

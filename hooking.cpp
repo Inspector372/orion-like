@@ -411,7 +411,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 
     uint64_t magic_arg = 0x2020064020200640ULL;
     void* wrapper_params[] = {&magic_arg};
-    real_cuLaunchKernel(wrapper_handle_hook, 20, 21, 22, 1, 1, 1, 0, 0, wrapper_params, nullptr);
+    // real_cuLaunchKernel(wrapper_handle_hook, 20, 21, 22, 1, 1, 1, 0, 0, wrapper_params, nullptr);
     // real_cuLaunchKernel(f, 20, 21, 22, 1, 1, 1, sharedMemBytes, 0, kernelParams, extra);
 
 	pthread_mutex_lock(work_queue_mutex[idx]);
@@ -691,6 +691,7 @@ cudaError_t CUDARTAPI cudaMallocAsync(void** devPtr, size_t size, cudaStream_t s
     work_queue[idx]->push(record);
     pthread_mutex_unlock(work_queue_mutex[idx]);
 
+    block(idx, work_queue_mutex, work_queue);
     return cudaSuccess;
 }
 
@@ -837,13 +838,13 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
 
 	if (symbol && strcmp(symbol, "cuLaunchKernel_ptsz") == 0) {
         fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel_ptsz pointer assignment!\n");
-        *pfn = (void*)cuGraphLaunch;
+        *pfn = (void*)cuLaunchKernel_ptsz;
         return CUDA_SUCCESS;
     }
 
 	if (symbol && strcmp(symbol, "cuLaunchKernelEx_ptsz") == 0) {
         fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernelEx_ptsz pointer assignment!\n");
-        *pfn = (void*)cuGraphLaunch;
+        *pfn = (void*)cuLaunchKernelEx_ptsz;
         return CUDA_SUCCESS;
     }
 

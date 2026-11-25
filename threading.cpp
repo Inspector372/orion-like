@@ -158,9 +158,7 @@ void register_functions() {
 	*(void**)(&actual_cudaMemsetAsync) = dlsym(RTLD_NEXT, "cudaMemsetAsync");
     assert(actual_cudaMemsetAsync != nullptr);
 
-    void* runtime = dlopen("libcudart.so.12", RTLD_NOW | RTLD_LOCAL);
-    assert(runtime != nullptr);
-    *(void**)(&actual_cudaMalloc) = actual_dlsym(runtime, "cudaMalloc");
+    *(void**)(&actual_cudaMalloc) = dlsym(RTLD_NEXT, "cudaMalloc");
     assert(actual_cudaMalloc);
 
 	*(void**)(&actual_cudaMemcpy) = dlsym(RTLD_NEXT, "cudaMemcpy");
