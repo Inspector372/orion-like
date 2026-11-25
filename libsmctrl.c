@@ -9,13 +9,6 @@
 	!!!! THIS IS MODIFIED VERSION !!!!
     Original codes of libsmctrl is on top, and I added my own configurations on bottom.
 */
-
-
-
-/*
-	82 SMs = 41 TPCs
-	masking of 41 TPCs as 0x1FFFFFFFFFFLL.
-*/
 #define FULL_MASK (0x1FFFFFFFFFFLL)
 
 #include <cuda.h>
@@ -586,7 +579,6 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 		if(*grid_X == 20 && *grid_Y == 21 && *grid_Z == 22) {
 			fprintf(stderr, "Fake launch\n");
 			this_sm_mask = FULL_MASK - ((0xCLL) << (9 * 2));
-			// this_sm_mask = FULL_MASK - 0xFLL;
 			*lower_sm_mask_ptr = (uint32_t)(this_sm_mask);
 			*upper_sm_mask_ptr = (uint32_t)(this_sm_mask >> 32);
 			// *upper_ptr = initial_kernel_upper[0];
@@ -597,8 +589,7 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 
 		for(int i=0; i<initial_kernel_count; i++) {
 			if(*lower_ptr == initial_kernel_lower[i] && *upper_ptr == initial_kernel_upper[i]) {
-				// fprintf(stderr, "Called initial kernel [%d]\n", i);
-				// this_sm_mask = FULL_MASK - 0xFLL;
+				fprintf(stderr, "Called initial kernel [%d]\n", i);
 				this_sm_mask = 0x1FFFFFFFFFCLL;
 				*lower_sm_mask_ptr = (uint32_t)(this_sm_mask);
 				*upper_sm_mask_ptr = (uint32_t)(this_sm_mask >> 32);
@@ -636,7 +627,6 @@ static void false_launch_callback(void *ukwn, int domain, int cbid, const void *
 			*register_cnt_v_ptr = wrapper_register_cnt_v;
 
 		this_sm_mask = FULL_MASK - ((0xCLL) << (last_client * 2));
-		// this_sm_mask = 0xFLL;
 		*lower_sm_mask_ptr = (uint32_t)(this_sm_mask);
 		*upper_sm_mask_ptr = (uint32_t)(this_sm_mask >> 32);
 	}

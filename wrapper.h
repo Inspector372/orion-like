@@ -37,7 +37,6 @@ extern void setup_metadata();
 extern void initial_kernels_run();
 extern cudaStream_t metadata_pass_stream;
 extern cudaError_t (*actual_cudaDeviceSynchronize)(void);
-extern CUresult (*actual_cuLaunchKernel_wrapper)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 
 extern ReleaseQueueEntry release_queue[];
 

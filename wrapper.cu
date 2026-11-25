@@ -20,7 +20,6 @@ CUfunction wrapper_handle;
 CUfunction metadata_table_insert_handle;
 CUfunction metadata_table_check_handle;
 
-CUresult (*actual_cuLaunchKernel_wrapper)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
 
 
 
@@ -72,15 +71,8 @@ void table_insert(uint64_t key, AtomMetaData value) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == 0) {
             atomMetaDataTable_cache[idx] = value;
-            void* params_insert[] = {
-                &idx,
-                &value
-            };
-            void* params_check[] = {
-                &idx
-            };
-            actual_cuLaunchKernel_wrapper(metadata_table_insert_handle, 1, 1, 1, 1, 1, 1, 0, (CUstream)metadata_pass_stream, params_insert, NULL);
-            actual_cuLaunchKernel_wrapper(metadata_table_check_handle, 1, 1, 1, 1, 1, 1, 0, (CUstream)metadata_pass_stream, params_check, NULL);
+            metadata_table_insert<<<1, 1, 0, metadata_pass_stream>>>(idx, value);
+            metadata_table_check<<<1, 1, 0, metadata_pass_stream>>>(idx);
             /*
             while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), (CUstream)metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
@@ -111,11 +103,8 @@ void table_delete(uint64_t key) {
     for(int i = 0; i < MAP_LENGTH; i++) {
         if(atomMetaDataTable_cache[idx].key == key) {
             atomMetaDataTable_cache[idx].key = 0;
-            void* params_insert[] = {
-                &idx,
-                &atomMetaDataTable_cache[idx]
-            };
-            actual_cuLaunchKernel_wrapper(metadata_table_insert_handle, 1, 1, 1, 1, 1, 1, 0, (CUstream)metadata_pass_stream, params_insert, NULL);
+            // TODO: this must be synchronous.
+            metadata_table_insert<<<1, 1, 0, metadata_pass_stream>>>(idx, atomMetaDataTable_cache[idx]);
             /*
             while(cuMemcpyHtoDAsync((CUdeviceptr)atomMetaDataTable_symbol_addr + idx * sizeof(AtomMetaData), &atomMetaDataTable_cache[idx], sizeof(AtomMetaData), metadata_pass_stream) != CUDA_SUCCESS) {
                 ;
