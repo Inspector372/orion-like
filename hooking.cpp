@@ -380,7 +380,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 
 	int idx = memory_client_idx();
     if(idx == -1) {
-        fprintf(stderr, "Warning: launch from non-client, maybe scheduler?\n");
+        // fprintf(stderr, "Warning: launch from non-client, maybe scheduler?\n");
         return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
     }
 	fprintf(stderr, "[cuHook] caught call from %d!\n", idx);
