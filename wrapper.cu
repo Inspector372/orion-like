@@ -220,6 +220,7 @@ void setup_metadata() {
     AtomMetaData zero_ptrs[MAP_LENGTH];
     for(int i = 0; i < MAP_LENGTH; i++) {
         zero_ptrs[i].key = 0;
+        zero_ptrs[i].concurrent_key = 0;
     }
     cudaMemcpyToSymbol(atomMetaDataTable, &zero_ptrs, sizeof(zero_ptrs));
     cudaMallocHost((void**)&atomMetaDataTable_cache, sizeof(AtomMetaData) * MAP_LENGTH);
