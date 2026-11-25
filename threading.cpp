@@ -44,7 +44,6 @@ cudaError_t (*actual_cudaDeviceSynchronize)(void) = nullptr;
 cudaError_t (*actual_cudaMemset)(void*, int, size_t) = nullptr;
 cudaError_t (*actual_cudaMemsetAsync)(void*, int, size_t, cudaStream_t) = nullptr;
 cudaError_t (CUDARTAPI *actual_cudaMalloc)(void**, size_t) = nullptr;
-cudaError_t (CUDARTAPI *actual_cudaMallocAsync)(void**, size_t, cudaStream_t) = nullptr;
 cudaError_t (*actual_cudaMemcpy)(void*, const void*, size_t, cudaMemcpyKind) = nullptr;
 cudaError_t (*actual_cudaMemcpyAsync)(void*, const void*, size_t, cudaMemcpyKind, cudaStream_t) = nullptr;
 
@@ -162,8 +161,7 @@ void register_functions() {
     void* runtime = dlopen("libcudart.so.12", RTLD_NOW | RTLD_LOCAL);
     assert(runtime != nullptr);
     *(void**)(&actual_cudaMalloc) = actual_dlsym(runtime, "cudaMalloc");
-    *(void**)(&actual_cudaMallocAsync) = actual_dlsym(runtime, "cudaMallocAsync");
-    assert(actual_cudaMalloc && actual_cudaMallocAsync);
+    assert(actual_cudaMalloc);
 
 	*(void**)(&actual_cudaMemcpy) = dlsym(RTLD_NEXT, "cudaMemcpy");
     assert(actual_cudaMemcpy != nullptr);
@@ -360,35 +358,11 @@ void* scheduler(void* scarg) {
 
                 case RECORD_CUDAMALLOCASYNC: {
                     record_cudaMallocAsync record = qrecord.data.r_cudaMallocAsync;
-                    if (record.client_event) {
-                        cudaStream_t stream = *sched_streams[turn];
-                        *record.status = cudaStreamWaitEvent(stream, record.client_event, 0);
-                        if (*record.status == cudaSuccess)
-                            *record.status = actual_cudaMallocAsync(record.devPtr, record.size, stream);
-                        if (*record.status == cudaSuccess &&
-                            cudaEventRecord(record.client_event, stream) != cudaSuccess) {
-                            fprintf(stderr, "Cannot publish per-thread stream allocation\n");
-                            std::exit(EXIT_FAILURE);
-                        }
-                        break;
-                    }
-                    *record.status = actual_cudaMallocAsync(record.devPtr, record.size, record.stream);
-                    if (*record.status == cudaSuccess && record.stream != *sched_streams[turn]) {
-                        // Client kernels are remapped onto this stream. Order their first use
-                        // after the allocation, even when the caller used the default stream.
-                        CUevent ready;
-                        CUresult result = cuEventCreate(&ready, CU_EVENT_DISABLE_TIMING);
-                        if (result == CUDA_SUCCESS) {
-                            result = cuEventRecord(ready, record.stream);
-                            if (result == CUDA_SUCCESS)
-                                result = cuStreamWaitEvent(*sched_streams[turn], ready, 0);
-                            CUresult destroyed = cuEventDestroy(ready);
-                            if (result == CUDA_SUCCESS) result = destroyed;
-                        }
-                        if (result != CUDA_SUCCESS) {
-                            fprintf(stderr, "Cannot order async allocation on scheduler stream: %d\n", (int)result);
-                            std::exit(EXIT_FAILURE);
-                        }
+                    cudaError_t status = actual_cudaMalloc(record.devPtr, record.size);
+                    if (status != cudaSuccess) {
+                        fprintf(stderr, "Scheduler cudaMallocAsync allocation failed: %s\n",
+                                cudaGetErrorString(status));
+                        std::exit(EXIT_FAILURE);
                     }
                     break;
                 }

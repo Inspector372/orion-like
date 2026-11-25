@@ -75,11 +75,10 @@ typedef struct record_cudaMalloc {
 } record_cudaMalloc;
 
 typedef struct record_cudaMallocAsync {
+    // The caller must keep the output location valid until the scheduler writes it.
     void** devPtr;
     size_t size;
     cudaStream_t stream;
-    cudaError_t* status;
-    cudaEvent_t client_event;
 } record_cudaMallocAsync;
 
 typedef struct record_cuMemAlloc {

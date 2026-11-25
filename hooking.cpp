@@ -683,36 +683,15 @@ cudaError_t CUDARTAPI cudaMallocAsync(void** devPtr, size_t size, cudaStream_t s
         return real_cudaMallocAsync(devPtr, size, stream);
     }
 
-    // A per-thread stream token refers to a different stream on the scheduler.
-    cudaEvent_t client_event = nullptr;
-    if (stream == cudaStreamPerThread) {
-        cudaError_t result = cudaEventCreateWithFlags(&client_event, cudaEventDisableTiming);
-        if (result != cudaSuccess) return result;
-        result = cudaEventRecord(client_event, stream);
-        if (result != cudaSuccess) {
-            cudaEventDestroy(client_event);
-            return result;
-        }
-    }
-    cudaError_t status = cudaErrorInitializationError;
     union record_data data;
-    data.r_cudaMallocAsync = {devPtr, size, stream, &status, client_event};
+    data.r_cudaMallocAsync = {devPtr, size, stream};
     queue_record record = {RECORD_CUDAMALLOCASYNC, data};
 
     pthread_mutex_lock(work_queue_mutex[idx]);
     work_queue[idx]->push(record);
     pthread_mutex_unlock(work_queue_mutex[idx]);
 
-    // The caller needs both the pointer and the allocation status before returning.
-    block(idx, work_queue_mutex, work_queue);
-    if (client_event) {
-        if (status == cudaSuccess && cudaStreamWaitEvent(stream, client_event, 0) != cudaSuccess) {
-            fprintf(stderr, "Cannot order async allocation on client per-thread stream\n");
-            abort();
-        }
-        cudaEventDestroy(client_event);
-    }
-    return status;
+    return cudaSuccess;
 }
 
 /*
