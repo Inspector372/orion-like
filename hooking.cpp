@@ -651,6 +651,70 @@ cudaError_t cudaMemcpyAsync(void* dst, const void* src, size_t count, cudaMemcpy
 
 }
 
+cudaError_t CUDARTAPI cudaMalloc(void** devPtr, size_t size) {
+    int idx = memory_client_idx();
+    if (idx < 0) {
+        static cudaError_t (CUDARTAPI *real_cudaMalloc)(void**, size_t) =
+            (cudaError_t (CUDARTAPI *)(void**, size_t))dlsym(RTLD_NEXT, "cudaMalloc");
+        if (!real_cudaMalloc) return cudaErrorInitializationError;
+        return real_cudaMalloc(devPtr, size);
+    }
+
+    cudaError_t status = cudaErrorInitializationError;
+    union record_data data;
+    data.r_cudaMalloc = {devPtr, size, &status};
+    queue_record record = {RECORD_CUDAMALLOC, data};
+
+    pthread_mutex_lock(work_queue_mutex[idx]);
+    work_queue[idx]->push(record);
+    pthread_mutex_unlock(work_queue_mutex[idx]);
+
+    // The caller needs both the pointer and the allocation status before returning.
+    block(idx, work_queue_mutex, work_queue);
+    return status;
+}
+
+cudaError_t CUDARTAPI cudaMallocAsync(void** devPtr, size_t size, cudaStream_t stream) {
+    int idx = memory_client_idx();
+    if (idx < 0) {
+        static cudaError_t (CUDARTAPI *real_cudaMallocAsync)(void**, size_t, cudaStream_t) =
+            (cudaError_t (CUDARTAPI *)(void**, size_t, cudaStream_t))dlsym(RTLD_NEXT, "cudaMallocAsync");
+        if (!real_cudaMallocAsync) return cudaErrorInitializationError;
+        return real_cudaMallocAsync(devPtr, size, stream);
+    }
+
+    // A per-thread stream token refers to a different stream on the scheduler.
+    cudaEvent_t client_event = nullptr;
+    if (stream == cudaStreamPerThread) {
+        cudaError_t result = cudaEventCreateWithFlags(&client_event, cudaEventDisableTiming);
+        if (result != cudaSuccess) return result;
+        result = cudaEventRecord(client_event, stream);
+        if (result != cudaSuccess) {
+            cudaEventDestroy(client_event);
+            return result;
+        }
+    }
+    cudaError_t status = cudaErrorInitializationError;
+    union record_data data;
+    data.r_cudaMallocAsync = {devPtr, size, stream, &status, client_event};
+    queue_record record = {RECORD_CUDAMALLOCASYNC, data};
+
+    pthread_mutex_lock(work_queue_mutex[idx]);
+    work_queue[idx]->push(record);
+    pthread_mutex_unlock(work_queue_mutex[idx]);
+
+    // The caller needs both the pointer and the allocation status before returning.
+    block(idx, work_queue_mutex, work_queue);
+    if (client_event) {
+        if (status == cudaSuccess && cudaStreamWaitEvent(stream, client_event, 0) != cudaSuccess) {
+            fprintf(stderr, "Cannot order async allocation on client per-thread stream\n");
+            abort();
+        }
+        cudaEventDestroy(client_event);
+    }
+    return status;
+}
+
 /*
     Hooks for APIs that need context synchronizations.
 */
