@@ -48,6 +48,7 @@ cudaError_t (*actual_cudaMemcpy)(void*, const void*, size_t, cudaMemcpyKind) = n
 cudaError_t (*actual_cudaMemcpyAsync)(void*, const void*, size_t, cudaMemcpyKind, cudaStream_t) = nullptr;
 
 CUresult (*actual_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**);
+CUresult (*actual_cuLaunchKernelEx)(const CUlaunchConfig*, CUfunction, void**, void**);
 CUresult (*actual_cuFuncGetParamInfo)(CUfunction, size_t, size_t*, size_t*);
 
 /*
@@ -144,6 +145,9 @@ void register_functions() {
 	*(void **)(&actual_cuLaunchKernel) = actual_dlsym(handle, "cuLaunchKernel");
 	assert(actual_cuLaunchKernel != NULL);
 	actual_cuLaunchKernel_wrapper = actual_cuLaunchKernel;
+
+	*(void **)(&actual_cuLaunchKernelEx) = actual_dlsym(handle, "cuLaunchKernelEx");
+	assert(actual_cuLaunchKernelEx != NULL);
 
 	*(void **)(&actual_cuFuncGetParamInfo) = actual_dlsym(handle, "cuFuncGetParamInfo");
 	assert(actual_cuFuncGetParamInfo != NULL);
@@ -397,8 +401,6 @@ void* scheduler(void* scarg) {
 
 				case RECORD_CULAUNCHKERNEL: {
 					record_cuLaunchKernel record = qrecord.data.r_cuLaunchKernel;
-					// fprintf(stderr, "scheduler found pending job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
-					// TODO: how to pass status?
 					launch_lidx = record.lidx;
 					launch_hidx = record.hidx;
 					launch_signal = 1;
@@ -409,11 +411,44 @@ void* scheduler(void* scarg) {
 					last_client = turn;
 
 					CUresult result;
-					// (*actual_cuLaunchKernel)(record.f, 20, 21, 22, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
+	
 					pthread_mutex_lock(context_sync_mutex);
 					result = (*actual_cuLaunchKernel)(record.f, record.gridDimX, record.gridDimY, record.gridDimZ, record.blockDimX, record.blockDimY, record.blockDimZ, record.sharedMemBytes, *sched_streams[turn], record.kernelParams, record.extra);
 					if(result != CUDA_SUCCESS) {
 						fprintf(stderr, "kernel launch error : %d\n", result);
+						std::exit(1);
+					}
+					if(NO_WRAPPER != 1) {
+						hash_insert(last_key, last_metadata);
+					}
+					pthread_mutex_unlock(context_sync_mutex);
+					
+					cudaEventRecord(launch_finish_event, *sched_streams[turn]);
+					if(NO_WRAPPER != 1) {
+						release_queue_insert(last_key, launch_finish_event);
+					}
+					// fprintf(stderr, "scheduler finish submitting job of #%d: function = %ld, lidx = %d\n", turn, (uint64_t)record.f, record.lidx);
+
+				}
+				break;
+
+				case RECORD_CULAUNCHKERNELEX: {
+					record_cuLaunchKernelEx record = qrecord.data.r_cuLaunchKernelEx;
+					launch_lidx = record.lidx;
+					launch_hidx = record.hidx;
+					launch_signal = 1;
+
+					cudaEvent_t launch_finish_event;
+					cudaEventCreateWithFlags(&launch_finish_event, cudaEventDisableTiming);
+					
+					last_client = turn;
+
+					CUresult result;
+					pthread_mutex_lock(context_sync_mutex);
+					record.config.hStream = (CUstream)*sched_streams[turn];
+					result = (*actual_cuLaunchKernelEx)(&(record.config), record.f, record.kernelParams, record.extra);
+					if(result != CUDA_SUCCESS) {
+						fprintf(stderr, "kernelEx launch error : %d\n", result);
 						std::exit(1);
 					}
 					if(NO_WRAPPER != 1) {

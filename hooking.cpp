@@ -408,12 +408,6 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 	new_record_data.r_cuLaunchKernel = new_record;
 	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
 
-
-    uint64_t magic_arg = 0x2020064020200640ULL;
-    void* wrapper_params[] = {&magic_arg};
-    // real_cuLaunchKernel(wrapper_handle_hook, 20, 21, 22, 1, 1, 1, 0, 0, wrapper_params, nullptr);
-    // real_cuLaunchKernel(f, 20, 21, 22, 1, 1, 1, sharedMemBytes, 0, kernelParams, extra);
-
 	pthread_mutex_lock(work_queue_mutex[idx]);
 	// Atomization.
 	for(int i=0; i<atom_num; i++) {
@@ -440,10 +434,9 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 }
 
 CUresult cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) {
-	fprintf(stderr, "Warning: (non-implemented) cuLaunchKernelEx is captured!\n");
 	if (real_cuLaunchKernelEx == NULL) {
         if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
-        real_cuLaunchKernelEx = (CUresult (*)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra))real_dlsym(cu_handle, "cuLaunchKernelEx");
+        real_cuLaunchKernelEx = (CUresult (*)(const CUlaunchConfig*, CUfunction, void**, void**))real_dlsym(cu_handle, "cuLaunchKernelEx");
         if(real_cuLaunchKernelEx == NULL) {
             fprintf(stderr, "FATAL ERROR: real_cuLaunchKernelEx == NULL\n");
         }
@@ -451,7 +444,66 @@ CUresult cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** ker
             fprintf(stderr, "FATAL ERROR: real_cuLaunchKernelEx == cuLaunchKernelEx\n");
         }
     }
-	return real_cuLaunchKernelEx(config, f, kernelParams, extra);
+    int idx = memory_client_idx();
+    if(idx == -1) {
+        // fprintf(stderr, "Warning: launch from non-client, maybe scheduler?\n");
+        return real_cuLaunchKernelEx(config, f, kernelParams, extra);
+    }
+	fprintf(stderr, "[cuExHook] caught call from %d!\n", idx);
+
+	int total_grid_dim = config->gridDimX * config->gridDimY * config->gridDimZ;
+
+	// TODO: dynamically adjust atom_size.
+	int atom_num = 8;
+	int atom_size = (total_grid_dim % atom_num == 0) ? (total_grid_dim / atom_num) : (total_grid_dim / atom_num + 1);
+	
+    // TODO: check lifetime of attrs.
+    CUlaunchConfig new_config = {
+        config->gridDimX,
+        config->gridDimY,
+        config->gridDimZ,
+        config->blockDimX,
+        config->blockDimY,
+        config->blockDimZ,
+        config->sharedMemBytes,
+        config->hStream,
+        config->attrs,
+        config->numAttrs,
+    };
+	CUresult err = CUDA_SUCCESS;
+	record_cuLaunchKernelEx new_record;
+	
+	assert(work_queue_mutex != NULL);
+	assert(work_queue != NULL);
+
+	new_record = {new_config, f, kernelParams, extra, 0, atom_size};
+	union record_data new_record_data;
+	new_record_data.r_cuLaunchKernelEx = new_record;
+	queue_record new_qrecord = {RECORD_CULAUNCHKERNELEX, new_record_data};
+
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+	// Atomization.
+	for(int i=0; i<atom_num; i++) {
+        if(NO_WRAPPER == 1) {
+            work_queue[idx]->push(new_qrecord);
+            break;
+        }
+		work_queue[idx]->push(new_qrecord);
+		new_qrecord.data.r_cuLaunchKernelEx.lidx += atom_size;
+		new_qrecord.data.r_cuLaunchKernelEx.hidx += atom_size;
+	}
+	
+
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+	
+	if(!cudaLaunchKernel_launched[idx]) {
+		fprintf(stderr, "[cuExHook] block-start from %d!\n", idx);
+		block(idx, work_queue_mutex, work_queue);
+		fprintf(stderr, "[cuExHook] block-end from %d!\n", idx);
+	}
+
+    return err;
 
 	
 }

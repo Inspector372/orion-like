@@ -4,6 +4,7 @@
 
 enum record_type {
 	RECORD_CULAUNCHKERNEL,
+	RECORD_CULAUNCHKERNELEX,
 	RECORD_CUDAEVENT,
 	RECORD_CUDAMEMSET,
 	RECORD_CUDAMEMSETASYNC,
@@ -35,6 +36,16 @@ typedef struct record_cuLaunchKernel {
 	uint32_t lidx;
 	uint32_t hidx;
 } record_cuLaunchKernel;
+
+typedef struct record_cuLaunchKernelEx {
+	CUlaunchConfig config;
+	CUfunction f;
+	void** kernelParams;
+	void** extra;
+
+	uint32_t lidx;
+	uint32_t hidx;
+} record_cuLaunchKernelEx;
 
 typedef struct record_cudaEvent {
 	cudaEvent_t event;
@@ -119,6 +130,7 @@ union record_data {
 	record_cuMemFree r_cuMemFree;
 	record_cuMemFreeHost r_cuMemFreeHost;
 	record_cuLaunchKernel r_cuLaunchKernel;
+	record_cuLaunchKernelEx r_cuLaunchKernelEx;
 	record_cudaEvent r_cudaEvent;
 	record_cudaMemset r_cudaMemset;
 	record_cudaMemsetAsync r_cudaMemsetAsync;
