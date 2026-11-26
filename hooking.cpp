@@ -646,6 +646,9 @@ cudaError_t cudaMemcpyAsync(void* dst, const void* src, size_t count, cudaMemcpy
 	work_queue[idx]->push(new_qrecord);
 	pthread_mutex_unlock(work_queue_mutex[idx]);
 	
+    fprintf(stderr, "[cudaMemcpyAsyncHook] blocking from %d!\n", idx);
+	block(idx, work_queue_mutex, work_queue);
+	fprintf(stderr, "[cudaMemcpyAsyncHook] unblocking from %d!\n", idx);
 
 	return cudaSuccess;
 
