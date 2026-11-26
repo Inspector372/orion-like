@@ -32,10 +32,6 @@ typedef struct record_cuLaunchKernel {
 	void** kernelParams;
 	void** extra;
 
-    // Extended launches keep the driver hook frame alive through submission.
-    const CUlaunchConfig* extended_config;
-    CUresult* status;
-    bool use_wrapper;
 	uint32_t lidx;
 	uint32_t hidx;
 } record_cuLaunchKernel;

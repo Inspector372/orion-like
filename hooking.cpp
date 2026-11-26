@@ -37,7 +37,6 @@
 #include <unistd.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <algorithm>
 #include <queue>
 #include <pthread.h>
 #include <assert.h>
@@ -76,7 +75,9 @@ cudaError_t (*real_cudaMemcpyAsync)(void* dst, const void* src, size_t count, cu
 
 cudaError_t (*real_cudaLaunchKernel)(const void*, dim3, dim3, void**, size_t, cudaStream_t) = NULL;
 CUresult (*real_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
+CUresult (*real_cuLaunchKernelEx)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) = NULL;
 CUresult (*real_cuLaunchKernel_ptsz)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) = NULL;
+CUresult (*real_cuLaunchKernelEx_ptsz)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) = NULL;
 CUresult (*real_cuGraphLaunch)(CUgraphExec hGraphExec, CUstream hStream) = NULL;
 CUresult (*real_cuLaunchCooperativeKernel)(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**) = NULL;
 
@@ -357,24 +358,6 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 gridDim, dim3 blockDim, void
 	return err;
 }
 
-static void enqueue_kernel_atoms(int idx, record_cuLaunchKernel record) {
-    uint64_t xy = (uint64_t)record.gridDimX * record.gridDimY;
-    // The wrapper accepts 32-bit block boundaries.
-    if (record.gridDimZ && xy > UINT32_MAX / record.gridDimZ) record.use_wrapper = false;
-    const unsigned int atoms = record.use_wrapper ? 8 : 1;
-    uint64_t blocks = record.use_wrapper ? xy * record.gridDimZ : 0;
-    uint64_t atom_size = blocks / atoms + (blocks % atoms != 0);
-    pthread_mutex_lock(work_queue_mutex[idx]);
-    for (unsigned int i = 0; i < atoms; ++i) {
-        record.lidx = std::min(i * atom_size, blocks);
-        record.hidx = std::min((i + 1) * atom_size, blocks);
-        record_data data;
-        data.r_cuLaunchKernel = record;
-        work_queue[idx]->push({RECORD_CULAUNCHKERNEL, data});
-    }
-    pthread_mutex_unlock(work_queue_mutex[idx]);
-}
-
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, 
                         unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
@@ -402,54 +385,75 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
     }
 	fprintf(stderr, "[cuHook] caught call from %d!\n", idx);
 
-    record_cuLaunchKernel record = {f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY,
-                                    blockDimZ, sharedMemBytes, hStream, kernelParams, extra,
-                                    NULL, NULL, !NO_WRAPPER, 0, 0};
-    enqueue_kernel_atoms(idx, record);
-    if (!cudaLaunchKernel_launched[idx]) block(idx, work_queue_mutex, work_queue);
-    return CUDA_SUCCESS;
+	// inspect kernel size and setup atomization info.
+
+	// Change: now we atomize it in block boundary always.
+	// This is more logical.
+	int total_grid_dim = gridDimX * gridDimY * gridDimZ;
+
+	// atom_size is now defined as number of 'block'.
+	// TODO: dynamically adjust atom_size.
+	int atom_num = 8;
+	int atom_size = (total_grid_dim % atom_num == 0) ? (total_grid_dim / atom_num) : (total_grid_dim / atom_num + 1);
+	
+
+	CUresult err = CUDA_SUCCESS;
+	record_cuLaunchKernel new_record;
+	
+	assert(work_queue_mutex != NULL);
+	assert(work_queue != NULL);
+
+	new_record = {f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra, 0, atom_size};
+	union record_data new_record_data;
+	new_record_data.r_cuLaunchKernel = new_record;
+	queue_record new_qrecord = {RECORD_CULAUNCHKERNEL, new_record_data};
+
+
+    uint64_t magic_arg = 0x2020064020200640ULL;
+    void* wrapper_params[] = {&magic_arg};
+    // real_cuLaunchKernel(wrapper_handle_hook, 20, 21, 22, 1, 1, 1, 0, 0, wrapper_params, nullptr);
+    // real_cuLaunchKernel(f, 20, 21, 22, 1, 1, 1, sharedMemBytes, 0, kernelParams, extra);
+
+	pthread_mutex_lock(work_queue_mutex[idx]);
+	// Atomization.
+	for(int i=0; i<atom_num; i++) {
+        if(NO_WRAPPER == 1) {
+            work_queue[idx]->push(new_qrecord);
+            break;
+        }
+		work_queue[idx]->push(new_qrecord);
+		new_qrecord.data.r_cuLaunchKernel.lidx += atom_size;
+		new_qrecord.data.r_cuLaunchKernel.hidx += atom_size;
+	}
+	
+
+	pthread_mutex_unlock(work_queue_mutex[idx]);
+	
+	if(!cudaLaunchKernel_launched[idx]) {
+		fprintf(stderr, "[cuHook] block-start from %d!\n", idx);
+		block(idx, work_queue_mutex, work_queue);
+		fprintf(stderr, "[cuHook] block-end from %d!\n", idx);
+	}
+
+    return err;
+
 }
 
-static bool can_split_extended_launch(const CUlaunchConfig* config) {
-    // Events, cooperative grids, and clusters require one physical launch.
-    // Treat unknown attributes conservatively while preserving them on replay.
-    for (unsigned int i = 0; i < config->numAttrs; ++i) {
-        switch (config->attrs[i].id) {
-        case CU_LAUNCH_ATTRIBUTE_IGNORE:
-        case CU_LAUNCH_ATTRIBUTE_ACCESS_POLICY_WINDOW:
-        case CU_LAUNCH_ATTRIBUTE_PRIORITY:
-            break;
-        default:
-            return false;
+CUresult cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) {
+	fprintf(stderr, "Warning: (non-implemented) cuLaunchKernelEx is captured!\n");
+	if (real_cuLaunchKernelEx == NULL) {
+        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+        real_cuLaunchKernelEx = (CUresult (*)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra))real_dlsym(cu_handle, "cuLaunchKernelEx");
+        if(real_cuLaunchKernelEx == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernelEx == NULL\n");
+        }
+        if(real_cuLaunchKernelEx == cuLaunchKernelEx) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernelEx == cuLaunchKernelEx\n");
         }
     }
-    return true;
-}
+	return real_cuLaunchKernelEx(config, f, kernelParams, extra);
 
-typedef CUresult (CUDAAPI *launch_ex_fn)(const CUlaunchConfig*, CUfunction, void**, void**);
-
-static CUresult submit_extended_launch(launch_ex_fn real_launch, const CUlaunchConfig* config,
-                                       CUfunction f, void** kernelParams, void** extra) {
-    if (!real_launch) return CUDA_ERROR_NOT_INITIALIZED;
-    int idx = memory_client_idx();
-    if (idx < 0) return real_launch(config, f, kernelParams, extra);
-    if (!config || (config->numAttrs && !config->attrs)) return CUDA_ERROR_INVALID_VALUE;
-
-    CUresult status = CUDA_SUCCESS;
-    record_cuLaunchKernel record = {f, config->gridDimX, config->gridDimY, config->gridDimZ,
-                                    config->blockDimX, config->blockDimY, config->blockDimZ,
-                                    config->sharedMemBytes, config->hStream, kernelParams, extra,
-                                    config, &status, !NO_WRAPPER && can_split_extended_launch(config), 0, 0};
-    enqueue_kernel_atoms(idx, record);
-    // The runtime or library may own config, attrs, kernelParams and extra.
-    // Keep this frame alive until the last driver submission consumes them.
-    block(idx, work_queue_mutex, work_queue);
-    return status;
-}
-
-CUresult CUDAAPI cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) {
-    static launch_ex_fn real_launch = (launch_ex_fn)memory_driver_symbol("cuLaunchKernelEx");
-    return submit_extended_launch(real_launch, config, f, kernelParams, extra);
+	
 }
 
 CUresult cuLaunchKernel_ptsz(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, 
@@ -471,20 +475,20 @@ CUresult cuLaunchKernel_ptsz(CUfunction f, unsigned int gridDimX, unsigned int g
 	
 }
 
-CUresult CUDAAPI cuLaunchKernelEx_ptsz(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) {
-    static launch_ex_fn real_launch = (launch_ex_fn)memory_driver_symbol("cuLaunchKernelEx_ptsz");
-    return submit_extended_launch(real_launch, config, f, kernelParams, extra);
-}
+CUresult cuLaunchKernelEx_ptsz(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra) {
+	fprintf(stderr, "Warning: (non-implemented) cuLaunchKernelEx_ptsz is captured!\n");
+	if (real_cuLaunchKernelEx_ptsz == NULL) {
+        if(cu_handle == NULL) cu_handle = dlopen("libcuda.so.1", RTLD_NOW | RTLD_GLOBAL);
+        real_cuLaunchKernelEx_ptsz = (CUresult (*)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra))real_dlsym(cu_handle, "cuLaunchKernelEx_ptsz");
+        if(real_cuLaunchKernelEx_ptsz == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernelEx_ptsz == NULL\n");
+        }
+        if(real_cuLaunchKernelEx_ptsz == cuLaunchKernelEx_ptsz) {
+            fprintf(stderr, "FATAL ERROR: real_cuLaunchKernelEx_ptsz == cuLaunchKernelEx_ptsz\n");
+        }
+    }
+	return real_cuLaunchKernelEx_ptsz(config, f, kernelParams, extra);
 
-static bool is_extended_launch(const char* symbol) {
-    return symbol && (!strcmp(symbol, "cuLaunchKernelEx") || !strcmp(symbol, "cuLaunchKernelEx_ptsz"));
-}
-
-static void* extended_launch_hook(void* resolved) {
-    if (!resolved) return NULL;
-    if (resolved == memory_driver_symbol("cuLaunchKernelEx")) return (void*)cuLaunchKernelEx;
-    if (resolved == memory_driver_symbol("cuLaunchKernelEx_ptsz")) return (void*)cuLaunchKernelEx_ptsz;
-    return resolved;
 }
 
 CUresult cuGraphLaunch(CUgraphExec hGraphExec, CUstream hStream) {
@@ -738,14 +742,6 @@ CUresult cuLibraryLoadData(CUlibrary* library, const void* code, CUjit_option* j
 */
 
 CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
-    if (is_extended_launch(symbol)) {
-        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t) =
-            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t))memory_driver_symbol("cuGetProcAddress");
-        if (!resolve) return CUDA_ERROR_NOT_INITIALIZED;
-        CUresult result = resolve(symbol, pfn, cudaVersion, flags);
-        if (result == CUDA_SUCCESS && pfn) *pfn = extended_launch_hook(*pfn);
-        return result;
-    }
 
     if (symbol && (strcmp(symbol, "cuMemAlloc") == 0 || strcmp(symbol, "cuMemAlloc_v2") == 0)) {
         // Let the driver validate the lookup and select its ABI first.
@@ -831,6 +827,12 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
         return CUDA_SUCCESS;
     }
 
+	if (symbol && strcmp(symbol, "cuLaunchKernelEx") == 0) {
+        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernelEx pointer assignment!\n");
+        *pfn = (void*)cuLaunchKernelEx;
+        return CUDA_SUCCESS;
+    }
+
 	if (symbol && strcmp(symbol, "cuGraphLaunch") == 0) {
         fprintf(stderr, "[HOOK v1] Hijacking cuGraphLaunch pointer assignment!\n");
         *pfn = (void*)cuGraphLaunch;
@@ -840,6 +842,12 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
 	if (symbol && strcmp(symbol, "cuLaunchKernel_ptsz") == 0) {
         fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernel_ptsz pointer assignment!\n");
         *pfn = (void*)cuLaunchKernel_ptsz;
+        return CUDA_SUCCESS;
+    }
+
+	if (symbol && strcmp(symbol, "cuLaunchKernelEx_ptsz") == 0) {
+        fprintf(stderr, "[HOOK v1] Hijacking cuLaunchKernelEx_ptsz pointer assignment!\n");
+        *pfn = (void*)cuLaunchKernelEx_ptsz;
         return CUDA_SUCCESS;
     }
 
@@ -861,14 +869,6 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
 }
 
 CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, unsigned int flags, void* symbolStatus) {
-    if (is_extended_launch(symbol)) {
-        static CUresult (CUDAAPI *resolve)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*) =
-            (CUresult (CUDAAPI *)(const char*, void**, int, cuuint64_t, CUdriverProcAddressQueryResult*))memory_driver_symbol("cuGetProcAddress_v2");
-        if (!resolve) return CUDA_ERROR_NOT_INITIALIZED;
-        CUresult result = resolve(symbol, pfn, cudaVersion, flags, (CUdriverProcAddressQueryResult*)symbolStatus);
-        if (result == CUDA_SUCCESS && pfn) *pfn = extended_launch_hook(*pfn);
-        return result;
-    }
 
     if (symbol && (strcmp(symbol, "cuMemAlloc") == 0 || strcmp(symbol, "cuMemAlloc_v2") == 0)) {
         // Let the driver validate the lookup and select its ABI first.
@@ -989,8 +989,6 @@ void* dlsym(void* handle, const char* symbol) {
         }
     }
 
-
-    if (is_extended_launch(symbol)) return extended_launch_hook(real_dlsym(handle, symbol));
 
     if (symbol && strcmp(symbol, "cuMemAlloc_v2") == 0) {
         void* resolved = real_dlsym(handle, symbol);
