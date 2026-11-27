@@ -95,7 +95,8 @@ cuGetProcAddress_t real_cuGetProcAddress_v2 = NULL;
     it's never invoked before one cycle of kernel: kernel-metadata insert-metadata check is finished.
 */
 CUresult (*real_cuLibraryGetModule)(CUmodule*, CUlibrary) = NULL;
-CUresult (*real_cuLibraryLoadData)(CUlibrary* library, const void* code, CUjit_option* jitOptions, void** jitOptionsValues, unsigned int  numJitOptions, CUlibraryOption* libraryOptions, void** libraryOptionValues, unsigned int  numLibraryOptions) = NULL;
+CUresult (*real_cuLibraryLoadData)(CUlibrary*, const void*, CUjit_option*, void**, unsigned int, CUlibraryOption*, void**, unsigned int) = NULL;
+CUresult (*real_cuLibraryUnload)(CUlibrary) = NULL;
 
 /*
 	Real instance of dlsym().
@@ -787,6 +788,23 @@ CUresult cuLibraryLoadData(CUlibrary* library, const void* code, CUjit_option* j
     return result;
 }
 
+CUresult cuLibraryUnload(CUlibrary library) {
+    if(real_cuLibraryUnload == NULL) {
+        real_cuLibraryUnload = (CUresult (*)(CUlibrary))real_dlsym(RTLD_NEXT, "cuLibraryUnload");
+        if(real_cuLibraryUnload == NULL) {
+            fprintf(stderr, "FATAL ERROR: real_cuLibraryUnload == NULL\n");
+        }
+    }
+    if(no_hook) {
+        return real_cuLibraryUnload(library);
+    }
+
+    pthread_mutex_lock(context_sync_mutex_thr);
+    CUresult result = real_cuLibraryUnload(library);
+    pthread_mutex_unlock(context_sync_mutex_thr);
+    return result;
+}
+
 /*
 	cuGetProcAddress is ACTUALLY where we redirect driver APIs.
 	for convenience(and maybe existing just name mangling way of linking), we set the exact same name for driver API hooks,
@@ -870,6 +888,12 @@ CUresult my_cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, un
     if (symbol && strcmp(symbol, "cuLibraryGetModule") == 0) {
         fprintf(stderr, "[HOOK v2] Hijacking cuLibraryGetModule pointer assignment!\n");
         *pfn = (void*)cuLibraryGetModule;
+        return CUDA_SUCCESS;
+    }
+
+    if (symbol && strcmp(symbol, "cuLibraryUnload") == 0) {
+        fprintf(stderr, "[HOOK v2] Hijacking cuLibraryUnload pointer assignment!\n");
+        *pfn = (void*)cuLibraryUnload;
         return CUDA_SUCCESS;
     }
 
@@ -995,8 +1019,14 @@ CUresult my_cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion,
     }
 
     if (symbol && strcmp(symbol, "cuLibraryGetModule") == 0) {
-        fprintf(stderr, "[HOOK v2] Hijacking cuLaunchKernel pointer assignment!\n");
+        fprintf(stderr, "[HOOK v2] Hijacking cuLibraryGetModule pointer assignment!\n");
         *pfn = (void*)cuLibraryGetModule;
+        return CUDA_SUCCESS;
+    }
+
+    if (symbol && strcmp(symbol, "cuLibraryUnload") == 0) {
+        fprintf(stderr, "[HOOK v2] Hijacking cuLibraryUnload pointer assignment!\n");
+        *pfn = (void*)cuLibraryUnload;
         return CUDA_SUCCESS;
     }
 
@@ -1107,6 +1137,14 @@ void* dlsym(void* handle, const char* symbol) {
         fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
 		PFN_cudaLaunchKernel target_func = &::cudaLaunchKernel; 
         return (void*)target_func;
+    }
+
+    /*
+        cuDNN resolves cuLibraryUnload through dlsym()??
+    */
+    if (symbol && (strcmp(symbol, "cuLibraryUnload") == 0)) {
+        fprintf(stderr, "[HOOK dlsym] dlsym intercepted call for %s! Returning our hook.\n", symbol);
+        return (void*)cuLibraryUnload;
     }
 
     return real_dlsym(handle, symbol);

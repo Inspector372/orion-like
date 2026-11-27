@@ -241,30 +241,10 @@ compiled by g++ and linked into the same `threading` executable.
 
 ## TODO
 
-Fix the deadlock when cudaDeviceSynchronize() is called
+Universal hook code against cuda driver APIs
 
-Inspect what causes 'collision' deadlock
-
-cudaStream hooking
-
-Add memory operation queue to kernels
-
-Hooking every cuMemcpy/cuMemset-type calls & MemsetAsync to 'truly' asynchronous
+cudaStream hooking / Async APIs to behave stream behaviors
 
 Python frontend support
 
 CudaGraph hook implementation(parallel)
-
-
-
-## Deadlocks Happening
-
-Freezing of cuMemcpyAsync() in libtorch testcases
-
-cuLaunchKernel vs. cudaLaunchKernel
-
-Any API vs. cuLibraryGetModule
-
-cuLaunchKernel vs. cuLibraryUnload
-
-cuLaunchKernel vs. cuMemFree_v2
